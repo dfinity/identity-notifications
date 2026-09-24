@@ -27,6 +27,8 @@ persistent actor {
 
   // One conversation per pair of people, keyed the same way from either side.
   let conversations = Map.empty<Text, List.List<Message>>();
+  let latestAt      = Map.empty<Text, Time.Time>();          // newest message
+  let readUpTo      = Map.empty<Text, Time.Time>();          // per reader
 
   func conversationId(a : Principal, b : Principal) : Text {
     let x = Principal.toText(a);
@@ -39,8 +41,10 @@ persistent actor {
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
     let id = conversationId(caller, to);
     let messages = switch (conversations.get(id)) { case (?m) m; case null List.empty() };
-    messages.add({ from = caller; text; at = Time.now() });
+    let at = Time.now();
+    messages.add({ from = caller; text; at });
     conversations.add(id, messages);
+    latestAt.add(id, at);
 
     notifications.send(to, {
       title     = Principal.toText(caller);
@@ -54,10 +58,17 @@ persistent actor {
     });
   };
 
-  // Opening a conversation is what makes its notification stale, including
-  // the copy sitting on whatever other device they left it on.
-  public shared ({ caller }) func openConversation(peer : Principal) : async () {
-    notifications.dismiss(caller, conversationId(caller, peer));
+  // Read state is a marker, not a flag: it moves forward as they read and back
+  // when they mark something unread again.
+  public shared ({ caller }) func markRead(peer : Principal, upTo : Time.Time) : async () {
+    let id = conversationId(caller, peer);
+    readUpTo.add(Principal.toText(caller) # "@" # id, upTo);
+
+    // Stale only once nothing is left unread. Reading half a conversation
+    // leaves the notification alone, which is what the user asked for by
+    // stopping.
+    let newest = switch (latestAt.get(id)) { case (?at) at; case null 0 };
+    if (upTo >= newest) notifications.dismiss(caller, id);
   };
 
   // A month of hourly buckets in one reply — some 30KB, so a dashboard takes
@@ -70,10 +81,15 @@ persistent actor {
 
 The conversation id is the whole integration: it is what the app already uses to
 find the messages, what makes a second message replace the first notification
-rather than stack, and what `dismiss` names when they open it somewhere.
-Reading the messages is a plain query with nothing from the library in it, so
-it is left out of the example entirely — `markRead` is where the library
-appears, and it is an update precisely because reading is not.
+rather than stack, and what `dismiss` names once they have read all of it somewhere.
+Reading the messages is a plain query with nothing from the library in it, so it
+is left out of the example entirely.
+
+Marking unread again is the case worth stating: nothing resurrects the
+notification. The content is gone and the tray entry with it, and sending a
+fresh one because someone flagged a message to come back to would be a
+notification they did not ask for. Unread state belongs to the app's own badge
+from that point on.
 The same key from both sides is fine, because a notification id derives from
 `(recipient, key)` and the recipients differ.
 
