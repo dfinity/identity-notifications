@@ -61,10 +61,8 @@ persistent actor {
   };
 
   // A month of hourly buckets in one reply — some 30KB, so a dashboard takes
-  // the lot and slices it client-side. Who may see it is the app's call; here,
-  // whoever controls the canister.
-  public query ({ caller }) func deliveryMetrics() : async Notifications.Metrics {
-    assert caller.isController();
+  // the lot and slices it client-side.
+  public query func deliveryMetrics() : async Notifications.Metrics {
     notifications.metrics();
   };
 };
