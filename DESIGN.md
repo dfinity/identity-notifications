@@ -12,7 +12,8 @@ copy, not a dependency. The only shared dependency is `mo:core`.
 ## What the app writes
 
 An `include` with nothing to configure, and one call inside the method that
-already did the work:
+already did the work. The `<system>` on both is what lets the library arm its
+own timers — leave it off `send` and the compiler warns rather than fails:
 
 ```motoko
 import Notifications "mo:identity-notifications";
@@ -23,7 +24,7 @@ persistent actor {
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
     // ... store the message ...
 
-    notifications.send(to, {
+    notifications.send<system>(to, {
       title     = "New message";
       body      = text;
       url       = ?("https://chat.example.com/chats/" # Principal.toText(caller));
@@ -48,6 +49,13 @@ Delivery, hour by hour, for whatever the app already uses to watch itself:
 
 ```motoko
 let { hours; backlog; misconfigured } = notifications.metrics();
+```
+
+Types come from their own module rather than the mixin, since a mixin exports
+members rather than types:
+
+```motoko
+import Types "mo:identity-notifications/Types";
 ```
 
 There are no handlers to implement and no library state for the app to keep.
@@ -480,16 +488,25 @@ The mixin injects two methods, and Internet Identity picks by what the channel
 needs:
 
 ```motoko
-public shared query func _internet_identity_notification_content(id : Nat64) : async ?Content
-public shared       func _internet_identity_notification_received(id : Nat64) : async ()
+public shared func _internet_identity_notification_content(id : Nat64) : async ?Content
+public shared func _internet_identity_notification_received(id : Nat64) : async ()
 ```
 
-The query is the fast path: one round trip, nothing recorded, which is what a
-worker wants with a user watching an empty notification. The update records that
-the notification was delivered, and returns nothing — delivery happens after the
-content has been fetched and shown, so a call that did both would be claiming
-receipt for something not yet delivered. Every channel fetches, delivers, then
-marks.
+Both are updates, and the first is not by choice. Motoko cannot read caller info
+from a query at all — the primitive requires the `system` capability, which a
+query does not have — so a query could not tell who was asking. Returning
+content to anyone who knew an id is not an option, since ids are derived from
+keys and keys can be guessable, so the pull costs a round of consensus.
+
+What that buys back is certainty: the content a channel renders went through
+consensus rather than being one replica's word, which was listed as an accepted
+risk while this was a query. What it costs is latency on the path where someone
+is looking at a notification waiting for its text.
+
+The second records that the notification was delivered and returns nothing —
+delivery happens after the content has been fetched and shown, so a call that
+did both would be claiming receipt for something not yet delivered. Every
+channel fetches, delivers, then marks.
 
 A receipt is also the only proof that a user has a working channel, which until now an app could only infer from a
 click.
@@ -930,12 +947,11 @@ any.
    detect a format, and the domain prefix already prevents a blob minted for one
    flow being accepted by the other. The library decodes the blob directly.
 
-2. **Uncertified content — accepted.** The query is the only content path, so a
-   single malicious replica can return any body for a notification. Certifying
-   it would mean the app certifying content it generated on the fly, and an
-   update per notification opened would put consensus on the path where a user
-   is staring at an empty notification. A replica that can lie about a body can
-   equally refuse to answer, so the exposure buys little; accepted knowingly.
+2. **Query or update — decided by the language.** This was to be a query, with
+   uncertified content accepted knowingly. Implementation settled it: Motoko
+   cannot read caller info from a query, so a query cannot establish who is
+   asking, and the content pull is an update. The exposure disappears and a
+   round of consensus appears in its place.
 3. **Method names — internal.** `_internet_identity_notification_content` and
    `_internet_identity_notification_received` are called by II's worker and
    implemented by II's library, so both sides have the same owner and change
