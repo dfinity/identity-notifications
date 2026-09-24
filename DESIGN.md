@@ -11,92 +11,44 @@ copy, not a dependency. The only shared dependency is `mo:core`.
 
 ## What the app writes
 
-An `include` with nothing to configure, a `send`, a `dismiss`, and — where the
-app wants to nudge someone — a question it can ask:
+An `include` with nothing to configure, and one call inside the method that
+already did the work:
 
 ```motoko
 import Notifications "mo:identity-notifications";
-import Principal     "mo:core/Principal";
-import List          "mo:core/List";
-import Map           "mo:core/Map";
-import Time          "mo:core/Time";
 
 persistent actor {
-
-  type Message = { from : Principal; text : Text; at : Time.Time };
-
-  // One conversation per pair of people, keyed the same way from either side.
-  let conversations = Map.empty<Text, List.List<Message>>();
-  // Both ends share the conversation id, so read state is per reader.
-  let readUpTo      = Map.empty<Principal, Map.Map<Text, Time.Time>>();
-
-  func conversationId(a : Principal, b : Principal) : Text {
-    let x = Principal.toText(a);
-    let y = Principal.toText(b);
-    if (x < y) x # "|" # y else y # "|" # x;
-  };
-
   include Notifications<system>();
 
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
-    let id = conversationId(caller, to);
-    let messages = switch (conversations.get(id)) { case (?m) m; case null List.empty() };
-    messages.add({ from = caller; text; at = Time.now() });
-    conversations.add(id, messages);
+    // ... store the message ...
 
     notifications.send(to, {
-      title     = Principal.toText(caller);
+      title     = "New message";
       body      = text;
-      url       = ?("https://chat.example.com/chat/" # Principal.toText(caller));
-      // The conversation is what this notification is about, so a second
-      // message updates the first instead of stacking beside it.
-      key       = ?id;
+      url       = ?"https://chat.example.com/chats";
+      key       = ?("chat-" # Principal.toText(caller));
       urgency   = null;
       expiresAt = null;
     });
   };
-
-  // Read state is a marker, not a flag: it moves forward as they read and back
-  // when they mark something unread again.
-  public shared ({ caller }) func markRead(conversation : Text, upTo : Time.Time) : async () {
-    let mine = switch (readUpTo.get(caller)) {
-      case (?m) m;
-      case null Map.empty<Text, Time.Time>();
-    };
-    mine.add(conversation, upTo);
-    readUpTo.add(caller, mine);
-
-    // The notification is stale only once nothing is left unread. Reading half
-    // a conversation leaves it alone, which is what the user asked for by
-    // stopping.
-    let newest = switch (conversations.get(conversation)) {
-      case (?messages) switch (messages.last()) { case (?m) m.at; case null 0 };
-      case null 0;
-    };
-    if (upTo >= newest) notifications.dismiss(caller, conversation);
-  };
-
-  // A month of hourly buckets in one reply — some 30KB, so a dashboard takes
-  // the lot and slices it client-side.
-  public query func deliveryMetrics() : async Notifications.Metrics {
-    notifications.metrics();
-  };
 };
 ```
 
-The conversation id is the whole integration: it is what the app already uses to
-find the messages, what makes a second message replace the first notification
-rather than stack, and what `dismiss` names once they have read all of it somewhere.
-Reading the messages is a plain query with nothing from the library in it, so it
-is left out of the example entirely.
+The `key` names what the notification is about. Sending again with the same key
+updates that notification instead of stacking a second one beside it, and it is
+what the app names when the notification stops mattering — the user read the
+conversation somewhere else:
 
-Marking unread again is the case worth stating: nothing resurrects the
-notification. The content is gone and the tray entry with it, and sending a
-fresh one because someone flagged a message to come back to would be a
-notification they did not ask for. Unread state belongs to the app's own badge
-from that point on.
-The same key from both sides is fine, because a notification id derives from
-`(recipient, key)` and the recipients differ.
+```motoko
+notifications.dismiss(recipient, "chat-" # Principal.toText(sender));
+```
+
+Delivery, hour by hour, for whatever the app already uses to watch itself:
+
+```motoko
+let { hours; backlog; misconfigured } = notifications.metrics();
+```
 
 There are no handlers to implement and no library state for the app to keep.
 Everything that can go wrong is either the library's to absorb — parking a
