@@ -32,7 +32,7 @@ do {
   ignore Outbox.add(o, alice, note("campaign", ?"c", ?#veryLow), HOUR, 1_000_000, 0);
   ignore Outbox.add(o, alice, note("urgent", ?"u", ?#high), HOUR, 1_000_000, 0);
 
-  let batch = Outbox.take(o, 2, 0);
+  let batch = Outbox.take(o, 2);
   assert batch.size() == 2;
   assert batch[0].lane == 0
 };
@@ -46,17 +46,17 @@ do {
     case null (0 : Nat64)
   };
 
-  let first = Outbox.take(o, 10, 0);
+  let first = Outbox.take(o, 10);
   assert first.size() == 1;
   assert Outbox.park(o, first[0]);
 
   // Not due yet, so a flush sees nothing.
   Outbox.promote(o, HOUR);
-  assert Outbox.take(o, 10, HOUR).size() == 0;
+  assert Outbox.take(o, 10).size() == 0;
 
   // Due near its expiry, so it comes back exactly once.
   Outbox.promote(o, 10 * HOUR);
-  let second = Outbox.take(o, 10, 10 * HOUR);
+  let second = Outbox.take(o, 10);
   assert second.size() == 1;
   assert not Outbox.park(o, second[0]);
   switch (Outbox.contentOf(o, id)) { case null {}; case (?_) assert false };
@@ -68,13 +68,13 @@ do {
   let o = Outbox.empty();
   ignore Outbox.add(o, alice, note("x", ?"k", null), 10 * HOUR, 1_000_000, 0);
 
-  let batch = Outbox.take(o, 10, 0);
+  let batch = Outbox.take(o, 10);
   Outbox.defer(o, batch[0], 2 * HOUR);
 
   Outbox.promote(o, HOUR);
-  assert Outbox.take(o, 10, HOUR).size() == 0;
+  assert Outbox.take(o, 10).size() == 0;
   Outbox.promote(o, 2 * HOUR);
-  assert Outbox.take(o, 10, 2 * HOUR).size() == 1
+  assert Outbox.take(o, 10).size() == 1
 };
 
 // At the ceiling the campaign tail goes and the urgent notification stays.

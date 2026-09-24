@@ -91,6 +91,6 @@ module {
       List.size(self.buckets)
     );
     List.clear(self.buckets);
-    for (bucket in kept.vals()) List.add(self.buckets, bucket)
+    for (bucket in kept.values()) List.add(self.buckets, bucket)
   }
 }

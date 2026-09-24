@@ -27,7 +27,7 @@ module {
       #sha256,
       Iter.concat(
         Iter.singleton(Nat8.fromNat(who.size())),
-        Iter.concat(who.vals(), what.vals())
+        Iter.concat(who.values(), what.values())
       )
     );
     KEYED | (leading64(digest) & (KEYED - 1))

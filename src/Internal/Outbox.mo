@@ -1,5 +1,4 @@
 import Int "mo:core/Int";
-import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
@@ -38,6 +37,7 @@ module {
     ready : LaneQueue.State<Entry>;
     parked : PriorityQueue.PriorityQueue<Entry>;
     content : Map.Map<Nat64, Types.Content>;
+    received : Map.Map<Nat64, Bool>;
     var counter : Nat64;
     var bytes : Nat
   };
@@ -46,6 +46,7 @@ module {
     ready = LaneQueue.empty<Entry>(LANES);
     parked = PriorityQueue.empty<Entry>();
     content = Map.empty<Nat64, Types.Content>();
+    received = Map.empty<Nat64, Bool>();
     var counter = 0;
     var bytes = 0
   };
@@ -135,7 +136,7 @@ module {
     }
   };
 
-  public func take(self : State, count : Nat, now : Time.Time) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);
+  public func take(self : State, count : Nat) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);
 
   /// A refusal earns one more attempt, just before the notification expires,
   /// which is the whole window the user has to sign in or turn notifications
@@ -158,11 +159,35 @@ module {
     PriorityQueue.push(self.parked, furthestDue, entry)
   };
 
+  /// Puts an entry back in its lane unchanged, for when nothing was enqueued
+  /// and the send simply has to happen again.
+  public func requeue(self : State, entry : Entry) {
+    LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry)
+  };
+
+  /// The app says this no longer needs anyone's attention. The content goes,
+  /// so a pull finds nothing and a channel that sweeps can close it.
+  public func dismiss(self : State, recipient : Principal, key : Text) {
+    release(self, Ids.keyed(recipient, key))
+  };
+
+  /// A channel delivered it. Recorded rather than acted on: other devices may
+  /// still pull the same notification, so content stays until it expires.
+  public func markReceived(self : State, id : Nat64) {
+    Map.add(self.received, Nat64.compare, id, true)
+  };
+
+  public func wasReceived(self : State, id : Nat64) : Bool = switch (Map.get(self.received, Nat64.compare, id)) {
+    case (?_) true;
+    case null false
+  };
+
   public func release(self : State, id : Nat64) {
     switch (Map.get(self.content, Nat64.compare, id)) {
       case (?content) {
         self.bytes -= sizeOf(content);
-        Map.remove(self.content, Nat64.compare, id)
+        Map.remove(self.content, Nat64.compare, id);
+        Map.remove(self.received, Nat64.compare, id)
       };
       case null {}
     }
@@ -193,7 +218,7 @@ module {
   };
 
   func laneOnly(lane : Nat) : [Nat] {
-    var weights : [var Nat] = [var 0, 0, 0, 0];
+    let weights : [var Nat] = [var 0, 0, 0, 0];
     weights[lane] := 1;
     Array_freeze(weights)
   };

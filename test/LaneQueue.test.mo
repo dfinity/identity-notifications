@@ -49,7 +49,7 @@ do {
 
   let out = LaneQueue.take<Item>(q, [8, 1], 27, byDeadline);
   var low = 0;
-  for (item in out.vals()) { if (item.lane == 1) low += 1 };
+  for (item in out.values()) { if (item.lane == 1) low += 1 };
   assert low == 3
 };
 
