@@ -28,7 +28,8 @@ persistent actor {
   // One conversation per pair of people, keyed the same way from either side.
   let conversations = Map.empty<Text, List.List<Message>>();
   let latestAt      = Map.empty<Text, Time.Time>();          // newest message
-  let readUpTo      = Map.empty<Text, Time.Time>();          // per reader
+  // Both ends share the conversation id, so read state is per reader.
+  let readUpTo      = Map.empty<Principal, Map.Map<Text, Time.Time>>();
 
   func conversationId(a : Principal, b : Principal) : Text {
     let x = Principal.toText(a);
@@ -61,10 +62,15 @@ persistent actor {
   // Read state is a marker, not a flag: it moves forward as they read and back
   // when they mark something unread again.
   public shared ({ caller }) func markRead(conversation : Text, upTo : Time.Time) : async () {
-    readUpTo.add(Principal.toText(caller) # "@" # conversation, upTo);
+    let mine = switch (readUpTo.get(caller)) {
+      case (?m) m;
+      case null Map.empty<Text, Time.Time>();
+    };
+    mine.add(conversation, upTo);
+    readUpTo.add(caller, mine);
 
-    // Stale only once nothing is left unread. Reading half a conversation
-    // leaves the notification alone, which is what the user asked for by
+    // The notification is stale only once nothing is left unread. Reading half
+    // a conversation leaves it alone, which is what the user asked for by
     // stopping.
     let newest = switch (latestAt.get(conversation)) { case (?at) at; case null 0 };
     if (upTo >= newest) notifications.dismiss(caller, conversation);
