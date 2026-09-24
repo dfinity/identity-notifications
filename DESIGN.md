@@ -59,6 +59,13 @@ persistent actor {
   public shared ({ caller }) func markRead(peer : Principal) : async () {
     notifications.dismiss(caller, conversationId(caller, peer));
   };
+
+  // Delivery, hour by hour. The library keeps it; who may see it is the app's
+  // call — here, whoever controls the canister.
+  public query ({ caller }) func notificationMetrics() : async Notifications.Metrics {
+    assert caller.isController();
+    notifications.metrics();
+  };
 };
 ```
 
