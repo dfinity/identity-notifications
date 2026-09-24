@@ -275,6 +275,29 @@ stored function, which is what keeps the state stable. `Outbox.mo` supplies them
 from a notification's urgency and expiry, and nothing else in the library knows
 how the ordering works.
 
+### Where a key may come from
+
+A key decides an id, and an id decides which notification a send replaces. So a
+key must come from data the *sender* cannot choose: their own principal, an id
+the app assigned, a conversation the app derived. Never free text the sender
+passed in, and never something guessable like `"order-42"` when any sender could
+name the same order.
+
+The failure it prevents is narrow but real. Ids are scoped to
+`(origin, recipient)`, so nothing crosses between users or apps, and content is
+only ever returned to the account II's signed sender info names — an attacker
+cannot read anyone's notification whatever id they know. What they can do, if
+the app lets them pick the key, is send to that same person with the same key:
+their notification takes the same id and supersedes the pending one, so the
+recipient sees the attacker's text where the app's should have been, or nothing
+at all if it is then dismissed. Spoofing and suppression, not disclosure, and
+only by someone the app already lets notify that person.
+
+Grinding the hash is not the way in. The recipient is fixed, so a targeted
+collision is a second preimage on 63 bits — around 9e18 hashes to replace one
+pending notification. The weakness is never the hash width; it is a key the
+wrong party controls.
+
 ### What the timer needs to hold
 
 Four constraints from `mo:core/Timer`, all of them load-bearing:
