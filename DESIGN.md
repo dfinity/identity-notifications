@@ -54,9 +54,9 @@ persistent actor {
     });
   };
 
-  // They have seen the conversation, so the notification their other devices
-  // are still showing is stale.
-  public shared ({ caller }) func markRead(peer : Principal) : async () {
+  // Opening a conversation is what makes its notification stale, including
+  // the copy sitting on whatever other device they left it on.
+  public shared ({ caller }) func openConversation(peer : Principal) : async () {
     notifications.dismiss(caller, conversationId(caller, peer));
   };
 
@@ -70,7 +70,7 @@ persistent actor {
 
 The conversation id is the whole integration: it is what the app already uses to
 find the messages, what makes a second message replace the first notification
-rather than stack, and what `dismiss` names when the user reads it somewhere.
+rather than stack, and what `dismiss` names when they open it somewhere.
 Reading the messages is a plain query with nothing from the library in it, so
 it is left out of the example entirely — `markRead` is where the library
 appears, and it is an update precisely because reading is not.
