@@ -60,15 +60,14 @@ persistent actor {
 
   // Read state is a marker, not a flag: it moves forward as they read and back
   // when they mark something unread again.
-  public shared ({ caller }) func markRead(peer : Principal, upTo : Time.Time) : async () {
-    let id = conversationId(caller, peer);
-    readUpTo.add(Principal.toText(caller) # "@" # id, upTo);
+  public shared ({ caller }) func markRead(conversation : Text, upTo : Time.Time) : async () {
+    readUpTo.add(Principal.toText(caller) # "@" # conversation, upTo);
 
     // Stale only once nothing is left unread. Reading half a conversation
     // leaves the notification alone, which is what the user asked for by
     // stopping.
-    let newest = switch (latestAt.get(id)) { case (?at) at; case null 0 };
-    if (upTo >= newest) notifications.dismiss(caller, id);
+    let newest = switch (latestAt.get(conversation)) { case (?at) at; case null 0 };
+    if (upTo >= newest) notifications.dismiss(caller, conversation);
   };
 
   // A month of hourly buckets in one reply — some 30KB, so a dashboard takes
