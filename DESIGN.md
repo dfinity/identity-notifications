@@ -381,22 +381,32 @@ and the pending content, until it expires or is dismissed. One ceiling covers
 both, and it is a byte budget:
 
 ```yaml
-notification_capacity_mb: "64"    # stored notifications, default 64
+notification_capacity_mb: "1024"    # stored notifications, default 1024
 ```
 
-Bytes rather than a count of notifications, because bytes are what actually run
-out and per-entry overhead is bytes too. Measured as stored, not capped per
-field: how long a title or body may be is the app's decision, and truncating
-someone's strings to fit a library's idea of a notification would be worse than
-refusing to store it.
+A gigabyte, not because memory is scarce but because the ceiling exists for a
+different reason than it looks. Under enhanced orthogonal persistence the heap
+is 64-bit and persists in place, so there is no 4GiB wall and no serialisation
+cost per upgrade to ration against. What a cap buys is graceful degradation: an
+app that outruns its capacity without one discovers it as an out-of-memory trap
+inside a library call, which is far worse than dropping the oldest entries and
+saying so in `dropped`.
 
-At the ceiling the oldest keyless entries go first, since keyed ones are
-supersedable and more likely still wanted, and each drop is counted in the
-bucket's `dropped`.
+So the default is set where a normal app never meets it. A campaign to a
+million recipients at a few hundred bytes each is some 300MB and fits
+comfortably, which is also why the library does not intern identical content:
+the mechanism existed only to make that campaign fit under a ceiling that was
+too low, and a heuristic earning nothing is worse than no heuristic.
+
+Bytes rather than a count of notifications, because bytes are what run out and
+per-entry overhead is bytes too. Measured as stored, not capped per field: how
+long a title or body may be is the app's decision, and truncating someone's
+strings to fit a library's idea of a notification would be worse than refusing
+to store it.
 
 The number that matters is not the ceiling though: content stays pending until
 it expires, so steady state is roughly II's retention window times the app's
-send rate. A busy app sits near its ceiling permanently and should raise the
+send rate. An app that genuinely lives near a gigabyte should raise the
 variable, which is exactly why it is one.
 
 ### One sender per origin
