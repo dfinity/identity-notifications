@@ -17,6 +17,7 @@ app wants to nudge someone — a question it can ask:
 ```motoko
 import Notifications "mo:identity-notifications";
 import Principal     "mo:core/Principal";
+import Array         "mo:core/Array";
 import List          "mo:core/List";
 import Map           "mo:core/Map";
 import Time          "mo:core/Time";
@@ -60,11 +61,16 @@ persistent actor {
     notifications.dismiss(caller, conversationId(caller, peer));
   };
 
-  // Delivery, hour by hour. The library keeps it; who may see it is the app's
-  // call — here, whoever controls the canister.
-  public query ({ caller }) func notificationMetrics() : async Notifications.Metrics {
+  // The hourly buckets a dashboard charts, from whichever point it asks for —
+  // each one carries the instant it covers, so paging back through a week is
+  // the same call with an earlier `since`. Who may see it is the app's call;
+  // here, whoever controls the canister.
+  public query ({ caller }) func deliveryChart(since : Time.Time) : async [Notifications.Bucket] {
     assert caller.isController();
-    notifications.metrics();
+    Array.filter<Notifications.Bucket>(
+      notifications.metrics().hours,
+      func(bucket) { bucket.start >= since },
+    );
   };
 };
 ```
