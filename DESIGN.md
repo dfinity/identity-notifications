@@ -47,9 +47,6 @@ persistent actor {
   };
 
   public shared ({ caller }) func read(from : Principal) : async [Message] {
-    // They are in the app, so they have signed in and can be tried again.
-    notifications.active(caller);
-
     let mine = switch (inboxes.get(caller)) { case (?l) List.toArray(l); case null [] };
 
     // Read here, so the notification on their other devices is stale.
@@ -61,75 +58,40 @@ persistent actor {
 ```
 
 There are no handlers to implement and no library state for the app to keep.
-Everything that can go wrong is either the library's to absorb — suppressing a
-recipient II has forgotten, retrying it a day later, backing off a saturated
-origin — or something the app reads when it wants it, from `metrics`.
+Everything that can go wrong is either the library's to absorb — parking a
+refused notification until its expiry, backing off a saturated origin — or
+something the app reads when it wants it, from `metrics`.
 
-### Hopeless recipients are suppressed, not surfaced
+### A refusal parks the notification until its expiry
 
-Two refusals mean nothing will reach this account for a while: `NoSuchRecipient`
-(II holds no record for it) and `NoChannel` (it has no channel enabled). Both
-are the library's to absorb, not the app's to handle.
+Two refusals mean nothing will reach this account right now: `NoSuchRecipient`
+(II holds no record for it, typically because the user has not signed in to the
+app in long enough) and `NoChannel` (they have no channel enabled). Both are
+fixed by the user — signing in, or turning notifications on — and neither is
+fixed by trying again a second later.
 
-A refused recipient is suppressed: sends to them are dropped without a call,
-counted in the bucket's `dropped`, and their content is not stored, so a dead
-account cannot consume capacity.
+So the entry is not dropped. Its next attempt is set to just before its own
+expiry and it goes back in the queue, which already orders by expiry, so it
+surfaces at the right moment with no timer and no bookkeeping of its own. The
+user has the whole window to come back, and if they do, they get the
+notification rather than nothing.
 
-Suppression is lifted by a probe, because it has to be — while everything is
-being dropped, nothing can be accepted, so there would be no way back. Once the
-backoff has expired, the next send to that recipient goes through for real;
-anything before it is still dropped. If the probe is accepted, suppression
-clears. If it is refused again, the window doubles: an hour, two, four, up to a
-day.
+Every notification therefore gets at most two attempts: one when it is sent and
+one near its expiry. If the second fails it is dropped and counted in the
+bucket's `dropped`. Cost is bounded by what the app sends, not by how many dead
+recipients it has.
 
-The probe is driven by the app's own traffic, so a suppressed recipient nobody
-sends to costs nothing and needs no timer. And the backoff starts short on
-purpose: a user who has just been through II's enable flow must not have an
-hour of notifications thrown away, while an account gone for months costs one
-wasted slot a day. A flat day would have got the first case badly wrong.
+The dormant group chat falls out of this for free. Each dead member holds one
+parked entry per conversation key, and every later message for that key
+*replaces* the parked entry instead of queueing another attempt — so the first
+message to a group of ten thousand mostly-dead members costs ten thousand
+refusals, and every message after it costs none.
 
-### What suppression costs to remember
-
-An entry is a principal, a deadline and a backoff level: about 50 bytes plus map
-overhead. What bounds the table is not the app's user count but its refusal
-rate — an entry exists only while its recipient is suppressed, and disappears
-once a probe is accepted or nothing is sent to them again.
-
-The escalation is why entries are kept between windows rather than forgotten and
-recreated. Forgetting means a long-dead account restarts at an hour every time,
-costing around twenty-four wasted slots a day instead of one.
-
-Suppression shares the `notification_capacity_mb` budget with pending content,
-and content dominates it: 50 bytes against a few hundred for a notification. If
-it ever came under pressure, the entries to evict are the ones with the shortest
-remaining window, because evicting those costs one wasted send while evicting a
-day-long one costs twenty-three.
-
-### Being told a user is back
-
-An app sees something the library cannot: the user themselves, calling it.
-
-```motoko
-notifications.active(recipient)
-```
-
-It clears any suppression on that recipient immediately. For `NoSuchRecipient`
-that is exactly the fix — a user in the app has signed in, so II knows the
-account again — and without it the first hour of their return would be thrown
-away. For `NoChannel` it is a cheap reason to probe again, since being present
-is not the same as having enabled notifications but is the moment they might
-have.
-
-Calling it is optional; the backoff is what apps that never do rely on. One
-line in whatever method already knows a user is there is enough, and calling it
-for a recipient that is not suppressed does nothing.
-
-None of this is exposed. An earlier draft had a `reachable` flag for the app to
-read, on the theory it could prompt "you have consent but no device set up" —
-but II owns channel setup, knows the same fact first-hand, and has the UI where
-a user fixes it, so the app relaying a staler copy adds nothing. Worse, an app
-would eventually gate its own sends on it and stop notifying someone whose flag
-had gone stale, which is worse than sending into the void.
+There is no per-recipient state anywhere in this: no suppression table, no
+backoff, no probes, and nothing for the app to call when a user comes back. An
+earlier draft had all four, plus an `active(recipient)` the app was expected to
+sprinkle through its own methods. Parking the entry it already holds does the
+same work with none of it.
 
 ### One injected name
 
@@ -141,7 +103,6 @@ So the mixin injects exactly one:
 ```motoko
 notifications.send(recipient, notification)      // send, or update by key
 notifications.dismiss(recipient, key)            // no longer needs attention
-notifications.active(recipient)                  // they are here right now
 notifications.metrics()                          // the delivery pipeline, hour by hour
 ```
 
@@ -362,7 +323,7 @@ The response drives everything:
 
 - `Ok { not_accepted = [] }` — done, entries stay in `pending` until they expire.
 - `NoSuchRecipient` / `NoChannel` — that user cannot be reached; drop the content
-  and suppresses that recipient.
+  and parks it until near its expiry for one more attempt.
 - `Deferred { retry_after }` — keep the entry in the outbox and arm a timer for
   `retry_after`. No capacity is wasted retrying earlier.
 - `Err(TooManyNotifications { limit })` — record `limit`, re-split, send again in
@@ -766,8 +727,8 @@ behaviour or a question the app asks:
 
 | what happens | where it goes |
 | --- | --- |
-| II holds no record for the account | suppressed; the next send after the backoff probes; counted in `dropped` |
-| the account has no channel | suppressed; the next send after an hour probes, and acceptance clears it |
+| II holds no record for the account | parked until near its expiry, tried once more, then counted in `dropped` |
+| the account has no channel | parked the same way; the user has the whole window to turn notifications on |
 | accepted, expired with nobody receiving it | counted in `dropped` |
 | deferred until expiry, drops, saturation | `metrics()` — `deferred` climbing, then `dropped` |
 | misconfiguration | `metrics().misconfigured`, and a canister log line |
@@ -850,8 +811,8 @@ app's decision, not the library's.
 
 | what happens | who sees it | what the library does |
 | --- | --- | --- |
-| `NoSuchRecipient` | the bucket's `dropped` | drops the content and suppresses that recipient for a day before trying again; II holds no record for the account, usually because the user has not signed in to the app in long enough |
-| `NoChannel` | the bucket's `dropped` | drops the content and suppresses that recipient with backoff; only the user can fix it, by enabling notifications in II |
+| `NoSuchRecipient` | the bucket's `dropped`, if the second attempt fails too | parks the entry until near its expiry and tries once more; II holds no record for the account, usually because the user has not signed in to the app in long enough |
+| `NoChannel` | the bucket's `dropped`, if the second attempt fails too | parks the entry until near its expiry; only the user can fix it, by enabling notifications in II, and now they have the whole window to |
 | `Deferred { retry_after }` | the bucket's `deferred` | keeps the entry, retries at `retry_after`, and keeps doing so until `expiresAt` |
 | deferred past `expiresAt` | the bucket's `dropped`; no callback, since it is the origin being saturated rather than anything about the user | drops it; II would refuse it anyway |
 | accepted, expired with no receipt | the bucket's `dropped` | sweeps the content; nobody was reachable before it aged out |
