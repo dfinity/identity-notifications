@@ -17,7 +17,6 @@ app wants to nudge someone — a question it can ask:
 ```motoko
 import Notifications "mo:identity-notifications";
 import Principal     "mo:core/Principal";
-import Array         "mo:core/Array";
 import List          "mo:core/List";
 import Map           "mo:core/Map";
 import Time          "mo:core/Time";
@@ -61,16 +60,12 @@ persistent actor {
     notifications.dismiss(caller, conversationId(caller, peer));
   };
 
-  // The hourly buckets a dashboard charts, from whichever point it asks for —
-  // each one carries the instant it covers, so paging back through a week is
-  // the same call with an earlier `since`. Who may see it is the app's call;
-  // here, whoever controls the canister.
-  public query ({ caller }) func deliveryChart(since : Time.Time) : async [Notifications.Bucket] {
+  // A month of hourly buckets in one reply — some 30KB, so a dashboard takes
+  // the lot and slices it client-side. Who may see it is the app's call; here,
+  // whoever controls the canister.
+  public query ({ caller }) func deliveryMetrics() : async Notifications.Metrics {
     assert caller.isController();
-    Array.filter<Notifications.Bucket>(
-      notifications.metrics().hours,
-      func(bucket) { bucket.start >= since },
-    );
+    notifications.metrics();
   };
 };
 ```
@@ -828,6 +823,11 @@ to email an operator when sending stalls reads `metrics()` from a timer it
 already has and applies its own threshold, so the policy — what counts as
 stalled, who to tell, how often — stays with the app instead of the library
 inventing a definition and a required handler to deliver it.
+
+A bucket is a timestamp and five small numbers, so the whole ring encodes to
+tens of kilobytes and `metrics()` returns all of it in one reply — there is
+nothing to paginate against a 2MB limit, and a dashboard slices the window it
+wants client-side.
 
 The ring is a stable field of the mixin, like the outbox and the pending
 content, so it survives upgrades rather than restarting empty at the worst
