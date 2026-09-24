@@ -17,45 +17,62 @@ app wants to nudge someone — a question it can ask:
 ```motoko
 import Notifications "mo:identity-notifications";
 import Principal     "mo:core/Principal";
-import Array         "mo:core/Array";
 import List          "mo:core/List";
 import Map           "mo:core/Map";
+import Time          "mo:core/Time";
 
 persistent actor {
 
-  type Message = { from : Principal; text : Text };
+  type Message = { from : Principal; text : Text; at : Time.Time };
 
-  let inboxes = Map.empty<Principal, List.List<Message>>();
+  // One conversation per pair of people, keyed the same way from either side.
+  let conversations = Map.empty<Text, List.List<Message>>();
+
+  func conversationId(a : Principal, b : Principal) : Text {
+    let x = Principal.toText(a);
+    let y = Principal.toText(b);
+    if (x < y) x # "|" # y else y # "|" # x;
+  };
 
   include Notifications<system>();
 
-  public shared ({ caller }) func message(to : Principal, text : Text) : async () {
-    let inbox = switch (inboxes.get(to)) { case (?l) l; case null List.empty() };
-    inbox.add({ from = caller; text });
-    inboxes.add(to, inbox);
+  public shared ({ caller }) func send(to : Principal, text : Text) : async () {
+    let id = conversationId(caller, to);
+    let messages = switch (conversations.get(id)) { case (?m) m; case null List.empty() };
+    messages.add({ from = caller; text; at = Time.now() });
+    conversations.add(id, messages);
 
     notifications.send(to, {
       title     = "New message";
       body      = text;
       url       = ?("/chat/" # Principal.toText(caller));
-      // Names what this is about, so the next message from the same sender
-      // replaces the notification instead of stacking another one.
-      key       = ?("chat-" # Principal.toText(caller));
+      // The conversation is what this notification is about, so a second
+      // message updates the first instead of stacking beside it.
+      key       = ?id;
       urgency   = null;
       expiresAt = null;
     });
   };
 
-  public shared ({ caller }) func read(from : Principal) : async [Message] {
-    let mine = switch (inboxes.get(caller)) { case (?l) List.toArray(l); case null [] };
+  // An update, not a query, because reading here dismisses the notification
+  // their other devices are still showing.
+  public shared ({ caller }) func read(peer : Principal) : async [Message] {
+    let id = conversationId(caller, peer);
+    notifications.dismiss(caller, id);
 
-    // Read here, so the notification on their other devices is stale.
-    notifications.dismiss(caller, "chat-" # Principal.toText(from));
-
-    Array.filter(mine, func(m : Message) : Bool { m.from == from });
+    switch (conversations.get(id)) {
+      case (?messages) List.toArray(messages);
+      case null [];
+    };
   };
 };
 ```
+
+The conversation id is the whole integration: it is what the app already uses to
+find the messages, what makes a second message replace the first notification
+rather than stack, and what `dismiss` names when the user reads it somewhere.
+The same key from both sides is fine, because a notification id derives from
+`(recipient, key)` and the recipients differ.
 
 There are no handlers to implement and no library state for the app to keep.
 Everything that can go wrong is either the library's to absorb — parking a
