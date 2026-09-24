@@ -36,7 +36,7 @@ persistent actor {
 
   include Notifications<system>();
 
-  public shared ({ caller }) func send(to : Principal, text : Text) : async () {
+  public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
     let id = conversationId(caller, to);
     let messages = switch (conversations.get(id)) { case (?m) m; case null List.empty() };
     messages.add({ from = caller; text; at = Time.now() });
