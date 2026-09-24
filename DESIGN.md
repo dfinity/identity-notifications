@@ -54,16 +54,8 @@ persistent actor {
     });
   };
 
-  public query ({ caller }) func messages(peer : Principal) : async [Message] {
-    switch (conversations.get(conversationId(caller, peer))) {
-      case (?messages) List.toArray(messages);
-      case null [];
-    };
-  };
-
-  // Separate from reading them, because this changes state and the UI does not
-  // wait on it: they have seen the conversation, so the notification their
-  // other devices are still showing is stale.
+  // They have seen the conversation, so the notification their other devices
+  // are still showing is stale.
   public shared ({ caller }) func markRead(peer : Principal) : async () {
     notifications.dismiss(caller, conversationId(caller, peer));
   };
@@ -73,8 +65,9 @@ persistent actor {
 The conversation id is the whole integration: it is what the app already uses to
 find the messages, what makes a second message replace the first notification
 rather than stack, and what `dismiss` names when the user reads it somewhere.
-Reading stays a query and marking read stays an update, so opening a chat costs
-one query and the dismissal rides along afterwards without the UI waiting.
+Reading the messages is a plain query with nothing from the library in it, so
+it is left out of the example entirely — `markRead` is where the library
+appears, and it is an update precisely because reading is not.
 The same key from both sides is fine, because a notification id derives from
 `(recipient, key)` and the recipients differ.
 
