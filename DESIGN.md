@@ -45,7 +45,7 @@ persistent actor {
     notifications.send(to, {
       title     = Principal.toText(caller);
       body      = text;
-      path      = ?("/chat/" # Principal.toText(caller));
+      url       = ?("https://chat.example.com/chat/" # Principal.toText(caller));
       // The conversation is what this notification is about, so a second
       // message updates the first instead of stacking beside it.
       key       = ?id;
@@ -499,7 +499,7 @@ One way: send again with the same `key`.
 
 ```motoko
 notifications.send(recipient, { title = "Order shipped"; body = "Arrives Tuesday";
-                                  path = ?"/orders/42"; key = ?"order-42" });
+                                  url = ?"https://shop.example.com/orders/42"; key = ?"order-42" });
 ```
 
 The library maps `(recipient, key)` to a stable notification id, so the second
@@ -630,7 +630,7 @@ the app says what happened, not how it should look.
 public type Notification = {
   title     : Text;        // one line, required
   body      : Text;        // a sentence or two, required
-  path      : ?Text;       // where acting on it takes them, e.g. "/chat/abc"
+  url       : ?Text;       // where acting on it takes them, on a known origin
   key       : ?Text;       // the thing this is about; same key updates it
   urgency   : ?Urgency;    // null = Normal
   expiresAt : ?Time.Time;  // null = II's default retention
@@ -640,18 +640,25 @@ public type Notification = {
 public type Content = {
   title : Text;
   body  : Text;
-  path  : ?Text;
+  url   : ?Text;
 };
 ```
 
-A path rather than a URL, because a path cannot point anywhere else. II
-resolves it against the origin the notification was sent for, so an app has no
-way to aim a notification at another site, by mistake or otherwise, and there
-is no validation rule for II to get wrong.
+A full URL rather than a path, because an app is reachable on several origins
+and the user is on one of them specifically. A path would have to be resolved
+against the origin the notification was sent for, which sends someone who uses
+`myapp.com` to `<canister>.icp0.io` — a different origin, and usually a
+different session.
+
+What keeps that safe is a list II already fetches: an app's
+`/.well-known/ii-alternative-origins`, used for sign-in. A notification's URL is
+opened when its origin is the sending origin or one of that origin's
+alternatives, and refused otherwise, so an app can reach any of its own domains
+and none of anyone else's.
 
 One function takes it — `notifications.send(recipient, notification)`. The
 split between what a channel renders and what II schedules on is the library's
-to make: `urgency` and `expiresAt` go into the send, `title`, `body` and `path`
+to make: `urgency` and `expiresAt` go into the send, `title`, `body` and `url`
 are stored for the pull. An app that only sets `title` and `body`
 writes two nulls less than it would with a separate options record, and nobody
 has to learn which field belongs to which half.
@@ -661,7 +668,7 @@ Each field has to mean something to every channel, which is what keeps them in:
 | field | Web Push | mail | in-app |
 | --- | --- | --- | --- |
 | `title`, `body` | notification text | subject, body | row title and preview |
-| `path` | click target | link | row target |
+| `url` | click target | link | row target |
 | `key` | reuses the id, so the same `tag` | thread | grouped rows |
 
 The app's name and logo are not fields. They are not the app's to repeat per
@@ -867,11 +874,12 @@ this library's. All this design assumes is that something calls
 origin and account, and calls `_internet_identity_notification_received` once
 delivered.
 
-One thing it does assume about rendering: `path` is resolved against the origin
-the notification was sent for, so a click lands on the app rather than on II's
-own root, which is where the Web Push worker sends it today. A path cannot name
-another origin, so there is nothing for II to validate — but something does have
-to resolve it.
+One thing it does assume about rendering: a click opens `content.url` rather
+than II's own root, which is where the Web Push worker sends it today, and that
+II checks the URL's origin against the sending origin and its
+`/.well-known/ii-alternative-origins` before opening it. That file is one II
+already fetches for sign-in, so the check reuses machinery rather than adding
+any.
 
 ## Decisions
 
