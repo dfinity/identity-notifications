@@ -26,7 +26,7 @@ persistent actor {
     notifications.send(to, {
       title     = "New message";
       body      = text;
-      url       = ?"https://chat.example.com/chats";
+      url       = ?("https://chat.example.com/chats/" # Principal.toText(caller));
       key       = ?("chat-" # Principal.toText(caller));
       urgency   = null;
       expiresAt = null;
