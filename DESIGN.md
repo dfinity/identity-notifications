@@ -404,6 +404,31 @@ long a title or body may be is the app's decision, and truncating someone's
 strings to fit a library's idea of a notification would be worse than refusing
 to store it.
 
+### What gets dropped at the ceiling
+
+Accepted notifications are untouchable. II has taken them, a channel may still
+deliver them, and a pull has to find content — evicting it means someone taps a
+notification and gets nothing, which is worse than a notification that never
+arrived. So accepted content stays until it expires, and everything shed comes
+from the outbox instead, where nothing has been shown to anyone yet.
+
+Within the outbox it is the lanes that decide: the lowest urgency first, and
+newest first inside a lane, so what goes is the tail of a `#VeryLow` campaign
+rather than the `#High` notification behind it. That is the app's own statement
+about what matters, applied at the only moment it costs something.
+
+If the outbox is empty and the ceiling is still met — every byte is accepted
+content waiting to expire — new sends are refused at the door rather than
+freeing space by breaking accepted ones. Both cases count in the bucket's
+`dropped`, and the backlog gauge pins at the ceiling, so an app living there
+looks different from one passing through.
+
+An earlier rule said "oldest keyless entries first", which was wrong twice
+over: a chat app keys everything, so it named nothing to drop, and age is a poor
+proxy for cost — the oldest entry is usually an accepted one holding up a
+visible notification, while the cheapest thing to lose is the newest tail of a
+campaign nobody knows about yet.
+
 The number that matters is not the ceiling though: content stays pending until
 it expires, so steady state is roughly II's retention window times the app's
 send rate. An app that genuinely lives near a gigabyte should raise the
