@@ -27,7 +27,6 @@ persistent actor {
 
   // One conversation per pair of people, keyed the same way from either side.
   let conversations = Map.empty<Text, List.List<Message>>();
-  let latestAt      = Map.empty<Text, Time.Time>();          // newest message
   // Both ends share the conversation id, so read state is per reader.
   let readUpTo      = Map.empty<Principal, Map.Map<Text, Time.Time>>();
 
@@ -42,10 +41,8 @@ persistent actor {
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
     let id = conversationId(caller, to);
     let messages = switch (conversations.get(id)) { case (?m) m; case null List.empty() };
-    let at = Time.now();
-    messages.add({ from = caller; text; at });
+    messages.add({ from = caller; text; at = Time.now() });
     conversations.add(id, messages);
-    latestAt.add(id, at);
 
     notifications.send(to, {
       title     = Principal.toText(caller);
@@ -72,7 +69,10 @@ persistent actor {
     // The notification is stale only once nothing is left unread. Reading half
     // a conversation leaves it alone, which is what the user asked for by
     // stopping.
-    let newest = switch (latestAt.get(conversation)) { case (?at) at; case null 0 };
+    let newest = switch (conversations.get(conversation)) {
+      case (?messages) switch (messages.last()) { case (?m) m.at; case null 0 };
+      case null 0;
+    };
     if (upTo >= newest) notifications.dismiss(caller, conversation);
   };
 
