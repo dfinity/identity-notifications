@@ -43,7 +43,10 @@ pub use types::{
 };
 
 /// Long enough that a busy canister batches instead of calling per message,
-/// short enough that nobody notices. Urgent notifications skip it.
+/// short enough that nobody notices. Everything waits for it, urgency
+/// included: urgency decides which lane drains first, not whether a call
+/// happens now, and an app that marked everything urgent would otherwise lose
+/// the batching altogether.
 const COALESCE: Duration = Duration::from_secs(2);
 
 /// What Internet Identity accepts in one call today. It corrects us with
@@ -78,7 +81,6 @@ thread_local! {
 /// [`metrics`].
 pub fn send(recipient: Principal, notification: Notification) {
     let now = ic_cdk::api::time();
-    let urgent = notification.urgency == Some(Urgency::High);
 
     let config = match configured() {
         Ok(config) => config,
@@ -100,7 +102,7 @@ pub fn send(recipient: Principal, notification: Notification) {
     });
 
     match added {
-        Some(_) => arm(urgent),
+        Some(_) => arm(),
         None => STATE.with_borrow_mut(|state| state.pipeline.record(now, Event::Dropped, 1)),
     }
 }
@@ -188,7 +190,7 @@ pub fn restore(snapshot: Snapshot) {
         state.batch_limit = snapshot.batch_limit;
         state.misconfigured = snapshot.misconfigured;
     });
-    arm(false);
+    arm();
 }
 
 fn configured() -> Result<Config, Misconfigured> {
@@ -215,7 +217,7 @@ fn sender_info() -> Option<SenderInfo> {
     (info.origin == config.origin).then_some(info)
 }
 
-fn arm(immediate: bool) {
+fn arm() {
     let arm = STATE.with_borrow_mut(|state| {
         if state.flush_armed || state.flushing {
             return false;
@@ -225,8 +227,7 @@ fn arm(immediate: bool) {
     });
 
     if arm {
-        let delay = if immediate { Duration::ZERO } else { COALESCE };
-        ic_cdk_timers::set_timer(delay, flush_once());
+        ic_cdk_timers::set_timer(COALESCE, flush_once());
     }
 }
 
@@ -277,7 +278,7 @@ async fn flush_once() {
     });
 
     if STATE.with_borrow(|state| state.outbox.backlog() > 0) {
-        arm(false);
+        arm();
     }
 }
 

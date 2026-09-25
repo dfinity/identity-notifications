@@ -2,7 +2,7 @@
 
 This is the design both implementations follow. It is written against the
 Motoko library, which came first; the Rust differences are collected in
-[Rust specifics](#rust-specifics) at the end.
+Rust specifics at the end.
 
 
 A Motoko library for apps that notify their users through Internet Identity.
@@ -211,7 +211,12 @@ user's order update would silently overwrite another notification of theirs.
 ## Sending
 
 `send` appends to the outbox and, if no flush is pending, arms one two
-seconds out. Everything that arrives in the meantime rides along.
+seconds out. Everything that arrives in the meantime rides along, urgency
+included: urgency decides which lane drains first, not whether a call happens
+now. An earlier draft let `#High` skip the window, which undoes the batching
+exactly where it matters — an app that marks everything urgent would make one
+call per notification — and two seconds is not what "urgent" means to someone
+waiting on a push.
 
 Two seconds is chosen against how the IC executes, not against how long a user
 will wait. The floor is already a round: the timer callback is a message in the
@@ -226,12 +231,10 @@ It also self-throttles. The flush competes with app messages in the same queue,
 so under load it lands late, the batch grows, and the call rate falls exactly
 when the canister is busiest. Load cannot increase the rate of calls at II.
 
-Three things cut the wait short or hold it open:
+Two things cut the wait short or hold it open:
 
 - **A full batch flushes immediately.** A fan-out that fills the batch limit
   does not sit waiting for the window.
-- **`urgency = #High` flushes immediately.** An app that says something is
-  urgent should not have it held for two seconds by a library.
 - **One flush is in flight at a time.** The next window is armed when the
   current call returns, so a slow or deferring II slows the library down
   instead of multiplying calls against it.
@@ -981,9 +984,6 @@ any.
 
 ## Rust specifics
 
-The Rust library follows this design with three differences, all of them
-consequences of the language rather than choices:
-
 **The content pull is a query.** Motoko cannot read caller info from a query —
 its prelude gates the primitive behind the `system` capability — so the Motoko
 library pays consensus for it until
@@ -991,12 +991,6 @@ library pays consensus for it until
 lands. `ic-cdk` exposes `msg_caller_info_signer` and `msg_caller_info_data`
 with no such gate, and the replica serves caller info to every query flavour,
 so here it is a `#[query]` from the start.
-
-**The app carries the state across upgrades.** There is no orthogonal
-persistence: `snapshot()` returns everything the library holds and `restore()`
-takes it back, for the app to save in its own `pre_upgrade`. The heaps are
-rebuilt on the way in, since their order is derived from the entries rather
-than being data.
 
 **The endpoints come from a macro.** `endpoints!()` expands to the two
 `#[ic_cdk::query]` / `#[ic_cdk::update]` functions Internet Identity calls,
