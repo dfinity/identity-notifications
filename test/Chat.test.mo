@@ -317,6 +317,12 @@ do {
     HOUR
   );
 
+  var shed = 0;
+  for (i in Nat.range(0, 20)) {
+    if (not Outbox.holds(w.outbox, Ids.keyed(user(0), "camp-" # Nat.toText(i)))) shed += 1
+  };
+  assert shed > 0;
+
   switch urgent {
     case (?id) switch (Outbox.contentOf(w.outbox, id)) {
       case (?_) {};

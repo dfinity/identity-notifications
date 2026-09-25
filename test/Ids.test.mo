@@ -35,7 +35,8 @@ do {
   assert Ids.keyless(seeded, 1) & KEYED == 0
 };
 
-// Counter ids stay distinct as the counter moves.
+// The recipient is length-prefixed, so no pair of (recipient, key) can be
+// spelled two ways and land on one id.
 do {
-  assert Ids.keyless(0, 41) != Ids.keyless(0, 42)
+  assert Ids.keyed(alice, "b-chat") != Ids.keyed(alice, "bchat")
 }

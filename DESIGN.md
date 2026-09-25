@@ -209,10 +209,16 @@ user's order update would silently overwrite another notification of theirs.
 `send` appends to the outbox and, if no flush is pending, arms one two
 seconds out. Everything that arrives in the meantime rides along, urgency
 included: urgency decides which lane drains first, not whether a call happens
-now. An earlier draft let `#High` skip the window, which undoes the batching
-exactly where it matters — an app that marks everything urgent would make one
-call per notification — and two seconds is not what "urgent" means to someone
-waiting on a push.
+now. Letting `#High` skip the window would undo the batching exactly where it
+matters — an app that marks everything urgent would make one call per
+notification — and two seconds is not what "urgent" means to someone waiting
+on a push.
+
+The timer is one-shot and only ever armed by a send, or by a flush that left
+something behind. A canister with an empty outbox has no timer scheduled and
+costs nothing until the next `send`. What does not survive an upgrade is the
+timer, so an outbox that does is picked up again from the app's post-upgrade
+path.
 
 Two seconds is chosen against how the IC executes, not against how long a user
 will wait. The floor is already a round: the timer callback is a message in the

@@ -1,3 +1,5 @@
+import List "mo:core/List";
+import Nat64 "mo:core/Nat64";
 import Outbox "../src/Internal/Outbox";
 import Principal "mo:core/Principal";
 
@@ -83,21 +85,67 @@ do {
   let o = Outbox.empty();
   let room = 1_000;
 
+  let campaign = List.empty<Nat64>();
   var i = 0;
-  while (i < 8) {
-    ignore Outbox.add(o, alice, note("campaign", ?("c" # debug_show i), ?#veryLow), HOUR, room, 0);
+  while (i < 20) {
+    switch (Outbox.add(o, alice, note("campaign", ?("c" # debug_show i), ?#veryLow), HOUR, room, 0)) {
+      case (?id) List.add(campaign, id);
+      case null {}
+    };
     i += 1
   };
   let urgent = Outbox.add(o, alice, note("urgent", ?"u", ?#high), HOUR, room, 0);
 
-  assert urgent != null;
+  var kept = 0;
+  for (id in List.values(campaign)) {
+    if (Outbox.holds(o, id)) kept += 1
+  };
+  assert kept < List.size(campaign);
+  assert Outbox.backlog(o) == kept + 1;
+
   switch (urgent) {
-    case (?id) switch (Outbox.contentOf(o, id)) {
-      case (?_) {};
-      case null assert false
-    };
+    case (?id) assert Outbox.holds(o, id);
     case null assert false
   }
+};
+
+// Accepted content is never shed, so a canister at its ceiling has to wait for
+// an expiry rather than lose what a channel may still pull.
+do {
+  let o = Outbox.empty();
+  // Room for one notification and no more.
+  let room = 100;
+
+  let filler = switch (Outbox.add(o, alice, note("filler", ?"f", null), HOUR, room, 0)) {
+    case (?id) id;
+    case null (0 : Nat64)
+  };
+  let batch = Outbox.take(o, 10);
+  Outbox.settle(o, batch[0]);
+
+  assert Outbox.add(o, alice, note("x", ?"x", null), HOUR, room, 0) == null;
+
+  // Past the filler's expiry there is room again, because a send sweeps.
+  assert Outbox.add(o, alice, note("x", ?"x", null), 2 * HOUR, room, HOUR) != null;
+  assert not Outbox.holds(o, filler)
+};
+
+// A deferral is not a refusal, so it does not spend the second attempt.
+do {
+  let o = Outbox.empty();
+  ignore Outbox.add(o, alice, note("x", ?"k", null), 30 * HOUR, 1_000_000, 0);
+
+  let first = Outbox.take(o, 10);
+  Outbox.defer(o, first[0], 2 * HOUR);
+  Outbox.promote(o, 2 * HOUR);
+
+  let deferred = Outbox.take(o, 10);
+  assert deferred.size() == 1;
+  assert Outbox.park(o, deferred[0], 2 * HOUR);
+
+  Outbox.promote(o, 30 * HOUR);
+  let last = Outbox.take(o, 10);
+  assert not Outbox.park(o, last[0], 25 * HOUR)
 };
 
 // Accepted content is there for a pull until the notification expires, and

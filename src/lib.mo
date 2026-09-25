@@ -53,8 +53,10 @@ mixin<system>() {
   var batchLimit : Nat = BATCH_GUESS;
   var misconfigured : ?{ why : Types.Misconfigured; since : Time.Time } = null;
   var seeded : Bool = false;
-  var flushArmed : Bool = false;
-  var flushing : Bool = false;
+  /// Transient because a timer does not survive an upgrade: a canister that
+  /// came back believing one was armed would never arm another.
+  transient var flushArmed : Bool = false;
+  transient var flushing : Bool = false;
 
   transient let notifications = object {
 
@@ -89,6 +91,13 @@ mixin<system>() {
     /// so a pull finds nothing and a channel that sweeps can close it.
     public func dismiss(recipient : Principal, key : Text) {
       Outbox.dismiss(outbox, recipient, key)
+    };
+
+    /// Picks up an outbox that outlived its timer. Call it from the actor's
+    /// `postupgrade`; a mixin cannot declare one itself, and Motoko timers do
+    /// not survive an upgrade.
+    public func resume<system>() {
+      if (Outbox.backlog(outbox) > 0) arm<system>()
     };
 
     public func metrics() : Types.Metrics = {

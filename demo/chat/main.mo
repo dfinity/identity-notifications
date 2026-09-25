@@ -23,6 +23,12 @@ persistent actor {
   let conversations = Map.empty<Text, Conversation>();
   let readUpTo = Map.empty<Principal, Map.Map<Text, Time.Time>>();
 
+  // Deprecated, and still the only hook an actor has for this: a mixin cannot
+  // declare one, and the timer holding the outbox open does not survive here.
+  system func postupgrade() {
+    notifications.resume<system>()
+  };
+
   /// One-to-one conversations are named by their two members, so both sides
   /// arrive at the same one.
   func directId(a : Principal, b : Principal) : Text {
