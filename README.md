@@ -21,6 +21,7 @@ use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications as notifications;
 use identity_notifications::{Memories, Notification};
+use std::cell::RefCell;
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -64,14 +65,14 @@ fn send_message(to: candid::Principal, text: String) {
 }
 ```
 
-Two more calls, and that is the whole surface:
+Two more calls, and that is the whole app-facing surface:
 
 ```rust
 notifications::dismiss(recipient, "chat-alice"); // no longer needs attention
 notifications::metrics();                        // the pipeline, hour by hour
 ```
 
-Two environment variables configure it, and nothing else:
+Configuration is three environment variables, one of them optional:
 
 ```yaml
 canisters:
