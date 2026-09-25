@@ -32,7 +32,10 @@ import Types "Types";
 mixin<system>() {
 
   /// Long enough that a busy canister batches instead of calling per message,
-  /// short enough that nobody notices. Urgent notifications skip it.
+  /// short enough that nobody notices. Everything waits for it, urgency
+  /// included: urgency decides which lane drains first, not whether a call
+  /// happens now, and an app that marked everything urgent would otherwise
+  /// lose the batching altogether.
   let COALESCE : Nat = 2_000_000_000;
 
   /// What Internet Identity accepts in one call today. It corrects us with
@@ -78,7 +81,7 @@ mixin<system>() {
           );
           switch added {
             case null Metrics.record(pipeline, now, #dropped, 1);
-            case (?_) arm<system>(notification.urgency == ?#high)
+            case (?_) arm<system>()
           }
         }
       }
@@ -137,11 +140,11 @@ mixin<system>() {
     misconfigured := ?{ why; since = Time.now() }
   };
 
-  func arm<system>(immediate : Bool) {
+  func arm<system>() {
     if (flushArmed or flushing) return;
     flushArmed := true;
     ignore Timer.setTimer<system>(
-      #nanoseconds(if (immediate) 0 else COALESCE),
+      #nanoseconds COALESCE,
       func() : async () { await flush() }
     )
   };
@@ -191,6 +194,6 @@ mixin<system>() {
     };
 
     Flush.apply(outbox, pipeline, batch, outcome, now);
-    if (Outbox.backlog(outbox) > 0) arm<system>(false)
+    if (Outbox.backlog(outbox) > 0) arm<system>()
   }
 }

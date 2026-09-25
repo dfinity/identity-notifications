@@ -255,8 +255,6 @@ module {
 
   func Array_freeze(weights : [var Nat]) : [Nat] = [weights[0], weights[1], weights[2], weights[3]];
 
-  func furthestExpiry(a : Entry, b : Entry) : Order.Order = Int.compare(b.expiresAt, a.expiresAt);
-
   func furthestDue(a : Entry, b : Entry) : Order.Order = Int.compare(a.dueAt, b.dueAt);
 
   func sizeOf(content : Types.Content) : Nat = Text.size(content.title) + Text.size(content.body) + (
