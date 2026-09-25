@@ -42,11 +42,16 @@ mixin<system>() {
   let DEFAULT_RETENTION : Int = 86_400_000_000_000;
 
   let configured = Config.read<system>();
+  transient let randomness = actor "aaaaa-aa" : actor {
+    raw_rand : () -> async Blob
+  };
+
   let outbox = Outbox.empty();
   let pipeline = Metrics.empty();
 
   var batchLimit : Nat = BATCH_GUESS;
   var misconfigured : ?{ why : Types.Misconfigured; since : Time.Time } = null;
+  var seeded : Bool = false;
   var flushArmed : Bool = false;
   var flushing : Bool = false;
 
@@ -148,6 +153,17 @@ mixin<system>() {
     let config = switch configured {
       case (#err(why)) { note(why); return };
       case (#ok(c)) c
+    };
+
+    if (not seeded) {
+      seeded := true;
+      try {
+        Outbox.seed(outbox, await randomness.raw_rand())
+      } catch (_) {
+        // Without it ids start from zero, which is only a problem for a
+        // deployment that already broke the one-sender rule.
+        seeded := true
+      }
     };
 
     let now = Time.now();

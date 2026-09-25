@@ -22,12 +22,20 @@ do {
 // cannot collide however many of either an app sends.
 do {
   assert Ids.keyed(alice, "chat-7") & KEYED == KEYED;
-  assert Ids.keyless(0) & KEYED == 0;
-  assert Ids.keyless(1) & KEYED == 0;
-  assert Ids.keyless(0x7FFF_FFFF_FFFF_FFFF) & KEYED == 0
+  assert Ids.keyless(0, 0) & KEYED == 0;
+  assert Ids.keyless(0, 1) & KEYED == 0;
+  assert Ids.keyless(0, 0x7FFF_FFFF_FFFF_FFFF) & KEYED == 0
+};
+
+// A seed offsets the whole counter space, so two canisters counting from
+// their own seeds do not both hand out the same low ids.
+do {
+  let seeded = Ids.seedFrom("\ff\ee\dd\cc\bb\aa\99\88" : Blob);
+  assert Ids.keyless(seeded, 1) != Ids.keyless(0, 1);
+  assert Ids.keyless(seeded, 1) & KEYED == 0
 };
 
 // Counter ids stay distinct as the counter moves.
 do {
-  assert Ids.keyless(41) != Ids.keyless(42)
+  assert Ids.keyless(0, 41) != Ids.keyless(0, 42)
 }

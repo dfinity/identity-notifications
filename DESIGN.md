@@ -183,7 +183,7 @@ There is no `(recipient, key) -> id` table. The id is derived:
 
 ```
 keyed:    id = 1 ‖ lower 63 bits of sha256(recipient ‖ key)
-keyless:  id = 0 ‖ nextId++
+keyless:  id = 0 ‖ (seed + nextId++)
 ```
 
 A table would have to be evicted or grow forever, and both are wrong: evicting
@@ -453,8 +453,11 @@ from keys makes that sharper rather than softer, in both directions:
   `"order-42"`, every notification from one replaces the other's, every time,
   not occasionally. The content each serves on pull differs too, so which text
   the user sees depends on which canister answered.
-- **Keyless ids collide eventually.** Each canister counts from its own
-  `nextId`, so both hand out 1, 2, 3.
+- **Keyless ids no longer collide by construction.** The counter starts from a
+  random 63-bit offset, taken from `raw_rand` on the first flush, so two
+  canisters counting for one origin overlap only by accident — and so does a
+  relay reinstalled with fresh state, which used to restart at one and collide
+  with its own still-pending ids.
 
 It also means the pull cannot be served by whichever canister happens to
 receive it: content lives in the canister that sent the notification, so a

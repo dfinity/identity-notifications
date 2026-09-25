@@ -4,6 +4,7 @@ import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
 import PriorityQueue "mo:core/PriorityQueue";
+import Blob "mo:core/Blob";
 import Text "mo:core/Text";
 import Time "mo:core/Time";
 import Ids "Ids";
@@ -42,6 +43,7 @@ module {
     /// updates what is already queued instead of queueing a second attempt.
     entries : Map.Map<Nat64, Entry>;
     var counter : Nat64;
+    var idSeed : Nat64;
     var bytes : Nat
   };
 
@@ -52,6 +54,7 @@ module {
     received = Map.empty<Nat64, Bool>();
     entries = Map.empty<Nat64, Entry>();
     var counter = 0;
+    var idSeed = 0;
     var bytes = 0
   };
 
@@ -79,7 +82,7 @@ module {
       case (?key) Ids.keyed(recipient, key);
       case null {
         self.counter += 1;
-        Ids.keyless(self.counter)
+        Ids.keyless(self.idSeed, self.counter)
       }
     };
 
@@ -207,6 +210,12 @@ module {
       };
       case null {}
     }
+  };
+
+  /// Once only, from the first flush: everything sent before it simply counts
+  /// from zero, which is where every canister used to start.
+  public func seed(self : State, randomness : Blob) {
+    if (self.idSeed == 0) self.idSeed := Ids.seedFrom(randomness)
   };
 
   public func contentOf(self : State, id : Nat64) : ?Types.Content = Map.get(self.content, Nat64.compare, id);

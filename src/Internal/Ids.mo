@@ -33,8 +33,17 @@ module {
     KEYED | (leading64(digest) & (KEYED - 1))
   };
 
-  public func keyless(counter : Nat64) : Nat64 {
-    counter & (KEYED - 1)
+  /// Counter ids start from a random offset rather than from one, so two
+  /// canisters sending for the same origin — a relay and its replacement, or
+  /// a deployment that broke the one-sender rule — do not both hand out the
+  /// same low numbers.
+  public func keyless(seed : Nat64, counter : Nat64) : Nat64 {
+    (seed +% counter) & (KEYED - 1)
+  };
+
+  /// The first eight bytes of anything random, as an offset.
+  public func seedFrom(randomness : Blob) : Nat64 {
+    leading64(randomness) & (KEYED - 1)
   };
 
   func leading64(digest : Blob) : Nat64 {
