@@ -25,9 +25,10 @@ persistent actor {
       {
         title = "New message";
         body = text;
-        url = ?"https://chat.example.com/chats";
-        // Names what this is about, so the next message updates this
-        // notification instead of stacking another one beside it.
+        // The conversation they will land in, on your own origin.
+        url = ?("https://chat.example.com/chats/" # Principal.toText(caller));
+        // The same conversation, named: the next message from this sender
+        // updates this notification instead of stacking another beside it.
         key = ?("chat-" # Principal.toText(caller));
         urgency = null;
         expiresAt = null;
@@ -40,7 +41,7 @@ persistent actor {
 Two more calls, and that is the whole app-facing surface:
 
 ```motoko
-notifications.dismiss(recipient, "chat-alice");  // no longer needs attention
+notifications.dismiss(recipient, "chat-" # Principal.toText(sender));  // no longer needed
 notifications.metrics();                         // the pipeline, hour by hour
 ```
 
