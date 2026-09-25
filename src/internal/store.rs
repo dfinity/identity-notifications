@@ -9,14 +9,14 @@
 //! lane, and the order survives an upgrade because it was never stored.
 
 use super::ids;
-use super::keys::{ParkedKey, ReadyKey};
+use super::keys::EntryKey;
 use crate::types::{
     Bucket, Content, Misconfigured, MisconfiguredSince, Notification, NotificationId,
 };
 use candid::{CandidType, Decode, Encode, Principal};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::{Bound, Storable};
-use ic_stable_structures::{BTreeMap, Cell, DefaultMemoryImpl};
+use ic_stable_structures::{BTreeMap, DefaultMemoryImpl};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -36,19 +36,12 @@ pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 /// compiling instead of quietly taking an id it was already using.
 #[derive(Clone, Copy, Debug)]
 pub struct Memories {
-    /// Notifications waiting to be sent.
-    pub outbox: MemoryId,
-    /// Notifications waiting for the second attempt a refusal earned them.
-    pub parked: MemoryId,
+    /// Notifications waiting to be sent, or waiting for a second attempt.
+    pub entries: MemoryId,
     /// What a channel may still pull.
     pub content: MemoryId,
-    /// An hour of the delivery pipeline per entry, thirty days deep.
+    /// An hour of the delivery pipeline per row, thirty days deep.
     pub metrics: MemoryId,
-    /// Everything small that is not a collection: the id seed and counter,
-    /// the bytes held against the capacity ceiling, the batch limit learned
-    /// from Internet Identity, and any misconfiguration with the time it
-    /// started.
-    pub bookkeeping: MemoryId,
 }
 
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
@@ -73,19 +66,12 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn ready_key(&self) -> ReadyKey {
-        ReadyKey {
-            lane: self.lane,
-            expires_at: self.expires_at,
-            id: self.id,
-        }
+    fn waiting_key(&self) -> EntryKey {
+        EntryKey::waiting(self.lane, self.expires_at, self.id)
     }
 
-    fn parked_key(&self) -> ParkedKey {
-        ParkedKey {
-            due_at: self.due_at,
-            id: self.id,
-        }
+    fn parked_key(&self) -> EntryKey {
+        EntryKey::parked(self.due_at, self.id)
     }
 }
 
@@ -156,6 +142,18 @@ macro_rules! candid_storable {
 pub struct StoredContent(pub Content);
 candid_storable!(StoredContent, 8_192);
 
+/// The metrics map holds one of these per row: an hour of the pipeline, or —
+/// under the reserved key `COUNTERS_ROW` — the library's own counters. Hour
+/// zero is the epoch and never a real bucket, so the key is free to take.
+#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    Hour(Bucket),
+    Counters(Meta),
+}
+candid_storable!(Row, 256);
+
+const COUNTERS_ROW: u64 = 0;
+
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Meta {
     pub counter: u64,
@@ -165,14 +163,11 @@ pub struct Meta {
     pub misconfigured: Option<MisconfiguredSince>,
 }
 candid_storable!(Meta, 256);
-candid_storable!(Bucket, 128);
 
 pub struct Store {
-    ready: BTreeMap<ReadyKey, Entry, Memory>,
-    parked: BTreeMap<ParkedKey, Entry, Memory>,
+    entries: BTreeMap<EntryKey, Entry, Memory>,
     content: BTreeMap<NotificationId, StoredContent, Memory>,
-    hours: BTreeMap<u64, Bucket, Memory>,
-    meta: Cell<Meta, Memory>,
+    rows: BTreeMap<u64, Row, Memory>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -187,12 +182,21 @@ pub enum Event {
 impl Store {
     pub fn new(manager: &MemoryManager<DefaultMemoryImpl>, memories: Memories) -> Self {
         Self {
-            ready: BTreeMap::init(manager.get(memories.outbox)),
-            parked: BTreeMap::init(manager.get(memories.parked)),
+            entries: BTreeMap::init(manager.get(memories.entries)),
             content: BTreeMap::init(manager.get(memories.content)),
-            hours: BTreeMap::init(manager.get(memories.metrics)),
-            meta: Cell::init(manager.get(memories.bookkeeping), Meta::default()),
+            rows: BTreeMap::init(manager.get(memories.metrics)),
         }
+    }
+
+    fn meta(&self) -> Meta {
+        match self.rows.get(&COUNTERS_ROW) {
+            Some(Row::Counters(meta)) => meta,
+            _ => Meta::default(),
+        }
+    }
+
+    fn set_meta(&mut self, meta: Meta) {
+        self.rows.insert(COUNTERS_ROW, Row::Counters(meta));
     }
 
     /// Adds a notification, or replaces the one its key already names.
@@ -205,7 +209,7 @@ impl Store {
         capacity_bytes: u64,
         now: u64,
     ) -> Option<NotificationId> {
-        let mut meta = *self.meta.get();
+        let mut meta = self.meta();
 
         let id = match notification.key.as_deref() {
             Some(key) => ids::keyed(recipient, key),
@@ -231,14 +235,14 @@ impl Store {
         if meta.bytes + size > capacity_bytes {
             meta.bytes = self.shed(meta.bytes, capacity_bytes, size);
             if meta.bytes + size > capacity_bytes {
-                self.meta.set(meta);
+                self.set_meta(meta);
                 return None;
             }
         }
 
         self.content.insert(id, StoredContent(content));
         meta.bytes += size;
-        self.meta.set(meta);
+        self.set_meta(meta);
 
         // Already waiting — queued, parked or deferred. Its content has just
         // been replaced, so the entry itself stands: queueing a second one
@@ -255,7 +259,7 @@ impl Store {
             due_at: now,
             parked: false,
         };
-        self.ready.insert(entry.ready_key(), entry);
+        self.entries.insert(entry.waiting_key(), entry);
 
         Some(id)
     }
@@ -263,20 +267,15 @@ impl Store {
     /// Moves parked entries back into their lanes once they are due, so a
     /// flush only ever sees what it may send now.
     pub fn promote(&mut self, now: u64) {
-        let due: Vec<(ParkedKey, Entry)> = self
-            .parked
-            .range(
-                ..=ParkedKey {
-                    due_at: now,
-                    id: u64::MAX,
-                },
-            )
+        let due: Vec<(EntryKey, Entry)> = self
+            .entries
+            .range(EntryKey::parked_start()..=EntryKey::parked_due_by(now))
             .map(|entry| entry.into_pair())
             .collect();
 
         for (key, entry) in due {
-            self.parked.remove(&key);
-            self.ready.insert(entry.ready_key(), entry);
+            self.entries.remove(&key);
+            self.entries.insert(entry.waiting_key(), entry);
         }
     }
 
@@ -285,8 +284,8 @@ impl Store {
     /// expiry leading its lane.
     pub fn take(&mut self, count: usize) -> Vec<Entry> {
         let mut taken = Vec::new();
-        let mut cursors: Vec<Option<ReadyKey>> = (0..LANES)
-            .map(|lane| Some(ReadyKey::lane_start(lane)))
+        let mut cursors: Vec<Option<EntryKey>> = (0..LANES)
+            .map(|lane| Some(EntryKey::lane_start(lane)))
             .collect();
 
         while taken.len() < count {
@@ -300,13 +299,13 @@ impl Store {
                     let Some(from) = cursors[lane] else { break };
 
                     match self
-                        .ready
-                        .range(from..=ReadyKey::lane_end(lane as u8))
+                        .entries
+                        .range(from..=EntryKey::lane_end(lane as u8))
                         .next()
                         .map(|entry| entry.into_pair())
                     {
                         Some((key, entry)) => {
-                            self.ready.remove(&key);
+                            self.entries.remove(&key);
                             taken.push(entry);
                             progressed = true;
                         }
@@ -341,7 +340,7 @@ impl Store {
 
         entry.parked = true;
         entry.due_at = entry.expires_at.saturating_sub(RETRY_LEAD);
-        self.parked.insert(entry.parked_key(), entry);
+        self.entries.insert(entry.parked_key(), entry);
         true
     }
 
@@ -349,13 +348,13 @@ impl Store {
     /// refusal, so it waits and comes back unchanged.
     pub fn defer(&mut self, mut entry: Entry, retry_after: u64) {
         entry.due_at = retry_after;
-        self.parked.insert(entry.parked_key(), entry);
+        self.entries.insert(entry.parked_key(), entry);
     }
 
     /// Nothing was enqueued, so the entry goes back where it came from.
     pub fn requeue(&mut self, mut entry: Entry, now: u64) {
         entry.due_at = now;
-        self.ready.insert(entry.ready_key(), entry);
+        self.entries.insert(entry.waiting_key(), entry);
     }
 
     /// Anything past its expiry is discarded rather than sent, since Internet
@@ -388,49 +387,52 @@ impl Store {
     }
 
     pub fn backlog(&self) -> u64 {
-        self.ready.len() + self.parked.len()
+        self.entries.len()
     }
 
     pub fn batch_limit(&self) -> usize {
-        self.meta.get().batch_limit.max(1) as usize
+        self.meta().batch_limit.max(1) as usize
     }
 
     pub fn set_batch_limit(&mut self, limit: usize) {
-        let mut meta = *self.meta.get();
+        let mut meta = self.meta();
         meta.batch_limit = limit as u64;
-        self.meta.set(meta);
+        self.set_meta(meta);
     }
 
     pub fn misconfigured(&self) -> Option<MisconfiguredSince> {
-        self.meta.get().misconfigured
+        self.meta().misconfigured
     }
 
     pub fn note(&mut self, why: Misconfigured, now: u64) {
-        let mut meta = *self.meta.get();
+        let mut meta = self.meta();
         if meta.misconfigured.map(|m| m.why) != Some(why) {
             meta.misconfigured = Some(MisconfiguredSince { why, since: now });
-            self.meta.set(meta);
+            self.set_meta(meta);
         }
     }
 
     pub fn is_seeded(&self) -> bool {
-        self.meta.get().id_seed != 0
+        self.meta().id_seed != 0
     }
 
     pub fn seed(&mut self, randomness: &[u8]) {
-        let mut meta = *self.meta.get();
+        let mut meta = self.meta();
         if meta.id_seed == 0 {
             meta.id_seed = ids::seed_from(randomness);
-            self.meta.set(meta);
+            self.set_meta(meta);
         }
     }
 
     pub fn record(&mut self, now: u64, event: Event, count: u64) {
         let start = now - (now % HOUR);
-        let mut bucket = self.hours.get(&start).unwrap_or(Bucket {
-            start,
-            ..Bucket::default()
-        });
+        let mut bucket = match self.rows.get(&start) {
+            Some(Row::Hour(bucket)) => bucket,
+            _ => Bucket {
+                start,
+                ..Bucket::default()
+            },
+        };
 
         match event {
             Event::Sent => bucket.sent += count,
@@ -440,19 +442,32 @@ impl Store {
             Event::Dropped => bucket.dropped += count,
         }
 
-        self.hours.insert(start, bucket);
+        self.rows.insert(start, Row::Hour(bucket));
 
-        while self.hours.len() as usize > KEEP_HOURS {
-            if let Some((oldest, _)) = self.hours.first_key_value() {
-                self.hours.remove(&oldest);
-            } else {
-                break;
+        // One row is the counters, which never counts towards the window.
+        while self.rows.len() as usize > KEEP_HOURS + 1 {
+            let oldest = self
+                .rows
+                .range(COUNTERS_ROW + 1..)
+                .next()
+                .map(|row| *row.key());
+            match oldest {
+                Some(hour) => {
+                    self.rows.remove(&hour);
+                }
+                None => break,
             }
         }
     }
 
     pub fn hours(&self) -> Vec<Bucket> {
-        self.hours.values().collect()
+        self.rows
+            .range(COUNTERS_ROW + 1..)
+            .filter_map(|row| match row.value() {
+                Row::Hour(bucket) => Some(bucket),
+                Row::Counters(_) => None,
+            })
+            .collect()
     }
 
     /// A receipt is recorded only while the content is still there; content
@@ -462,15 +477,14 @@ impl Store {
     }
 
     fn is_waiting(&self, id: NotificationId) -> bool {
-        self.ready.range(..).any(|entry| entry.key().id == id)
-            || self.parked.range(..).any(|entry| entry.key().id == id)
+        self.entries.range(..).any(|entry| entry.key().id() == id)
     }
 
     fn release(&mut self, id: NotificationId) {
         if let Some(StoredContent(content)) = self.content.remove(&id) {
-            let mut meta = *self.meta.get();
+            let mut meta = self.meta();
             meta.bytes = meta.bytes.saturating_sub(size_of_content(&content));
-            self.meta.set(meta);
+            self.set_meta(meta);
         }
     }
 
@@ -481,15 +495,15 @@ impl Store {
         for lane in (0..LANES).rev() {
             while bytes + needed > capacity_bytes {
                 let Some((key, entry)) = self
-                    .ready
-                    .range(ReadyKey::lane_start(lane)..=ReadyKey::lane_end(lane))
+                    .entries
+                    .range(EntryKey::lane_start(lane)..=EntryKey::lane_end(lane))
                     .next()
                     .map(|entry| entry.into_pair())
                 else {
                     break;
                 };
 
-                self.ready.remove(&key);
+                self.entries.remove(&key);
                 if let Some(StoredContent(content)) = self.content.remove(&entry.id) {
                     bytes = bytes.saturating_sub(size_of_content(&content));
                 }
@@ -523,11 +537,9 @@ mod tests {
     const HOUR: u64 = 3_600_000_000_000;
     const ROOMY: u64 = 1_000_000;
     const MEMORY_IDS: Memories = Memories {
-        outbox: MemoryId::new(0),
-        parked: MemoryId::new(1),
-        content: MemoryId::new(2),
-        metrics: MemoryId::new(3),
-        bookkeeping: MemoryId::new(4),
+        entries: MemoryId::new(0),
+        content: MemoryId::new(1),
+        metrics: MemoryId::new(2),
     };
 
     /// Off-canister, `DefaultMemoryImpl` is a plain vector, so the whole store

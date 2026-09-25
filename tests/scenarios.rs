@@ -13,11 +13,9 @@ use std::collections::HashMap;
 
 const HOUR: u64 = 3_600_000_000_000;
 const MEMORY_IDS: Memories = Memories {
-    outbox: MemoryId::new(0),
-    parked: MemoryId::new(1),
-    content: MemoryId::new(2),
-    metrics: MemoryId::new(3),
-    bookkeeping: MemoryId::new(4),
+    entries: MemoryId::new(0),
+    content: MemoryId::new(1),
+    metrics: MemoryId::new(2),
 };
 const CAPACITY: u64 = 1_073_741_824;
 

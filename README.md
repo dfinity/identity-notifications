@@ -41,11 +41,9 @@ fn init() {
         notifications::init(
             manager,
             Memories {
-                outbox: MemoryId::new(10),
-                parked: MemoryId::new(11),
-                content: MemoryId::new(12),
-                metrics: MemoryId::new(13),
-                bookkeeping: MemoryId::new(14),
+                entries: MemoryId::new(10),
+                content: MemoryId::new(11),
+                metrics: MemoryId::new(12),
             },
         )
     });

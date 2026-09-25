@@ -1000,12 +1000,21 @@ instruction budget. So the library keeps everything in `ic-stable-structures`
 maps over memories the app hands it, and `init` is called again after an
 upgrade rather than anything being restored.
 
-The app names each memory in a struct — `outbox`, `parked`, `content`,
-`metrics`, `bookkeeping` — rather than passing a base id or a count. A base hid
-what the library was taking, and a count answered "how many" without answering
-"which". Named fields answer both at the call site, and a version that needs
-another memory adds a field, which stops an app compiling rather than quietly
-taking an id it was already using.
+The app names each memory in a struct — `entries`, `content`, `metrics` —
+rather than passing a base id or a count. A base hid what the library was
+taking, and a count answered "how many" without answering "which". Named fields
+answer both at the call site, and a version that needs another memory adds a
+field, which stops an app compiling rather than quietly taking an id it was
+already using.
+
+Three, because that is as few as it can be without a cost. An app does not care
+how the library stores anything, so anything that merges for free should: the
+waiting and parked entries are one map told apart by a leading byte in the key,
+which keeps each kind in its own contiguous range and lets each be ordered by
+what suits it, and the counters are one reserved row of the metrics map. Content
+stays apart for a real reason: `StableBTreeMap` sizes its nodes from the value
+bound, and content runs to 8KB where an entry is 64 bytes, so sharing would make
+every entry pay for the larger bound.
 
 A closure the library calls for each memory it wants would be shorter, and was
 rejected: the closure would have to return the same memories in the same order

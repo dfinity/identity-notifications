@@ -197,18 +197,16 @@ fn post_upgrade() {
     open_notifications();
 }
 
-/// Which memory each part of the library gets. Ids 1 to 5 are its; this app
+/// Which memory each part of the library gets. Ids 1 to 3 are its; this app
 /// keeps out of them.
 fn open_notifications() {
     MEMORIES.with_borrow(|manager| {
         notifications::init(
             manager,
             Memories {
-                outbox: MemoryId::new(1),
-                parked: MemoryId::new(2),
-                content: MemoryId::new(3),
-                metrics: MemoryId::new(4),
-                bookkeeping: MemoryId::new(5),
+                entries: MemoryId::new(1),
+                content: MemoryId::new(2),
+                metrics: MemoryId::new(3),
             },
         )
     });
