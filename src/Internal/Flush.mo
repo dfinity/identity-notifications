@@ -12,15 +12,13 @@ import Outbox "Outbox";
 module {
 
   public type Outcome = {
-    /// Internet Identity refuses everything from this canister until the
-    /// origin publishes it as a sender.
+    /// The origin does not publish this canister as one of its senders.
     #notAuthorized;
-    /// The batch was too large. Nothing was enqueued, so it is safe to split
-    /// and send again — and the limit is worth remembering.
+    /// The batch was too large, and nothing in it was enqueued.
     #tooMany : Nat;
     /// Sent, with whatever Internet Identity would not take.
     #answered : [II.NotAccepted];
-    /// The call itself failed. Entries go back for their second attempt.
+    /// The call itself failed.
     #unreachable
   };
 
@@ -37,9 +35,7 @@ module {
     )
   };
 
-  /// Applies an outcome to the batch that produced it. Entries not named in
-  /// `not_accepted` were taken, so they are simply gone from the outbox — what
-  /// remains is content a channel may pull.
+  /// Applies an outcome to the batch that produced it.
   public func apply(
     outbox : Outbox.State,
     pipeline : Metrics.State,
@@ -68,7 +64,7 @@ module {
             case (?_) {
               // No such recipient, or no channel: the user fixes both, and has
               // until the notification expires to do it.
-              if (not Outbox.park(outbox, entry)) {
+              if (not Outbox.park(outbox, entry, now)) {
                 Metrics.record(pipeline, now, #dropped, 1)
               }
             }
@@ -78,18 +74,15 @@ module {
 
       case (#unreachable) {
         for (entry in batch.values()) {
-          if (not Outbox.park(outbox, entry)) {
+          if (not Outbox.park(outbox, entry, now)) {
             Metrics.record(pipeline, now, #dropped, 1)
           }
         }
       };
 
       case (#tooMany(_) or #notAuthorized) {
-        // Nothing was enqueued. The entries go back where they came from, to
-        // be sent again once the batch is split or the origin is fixed.
         for (entry in batch.values()) {
-          entry.dueAt := now;
-          Outbox.requeue(outbox, entry)
+          Outbox.requeue(outbox, entry, now)
         }
       }
     }

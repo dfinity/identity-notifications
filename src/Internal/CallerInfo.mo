@@ -7,10 +7,8 @@ import Text "mo:core/Text";
 /// Who Internet Identity says this call is for.
 ///
 /// The IC verifies the signature over the caller info before the callee runs,
-/// so nothing here is cryptography: it reads the signer, decides whether we
-/// trust them, and decodes what they said. The caller principal is ignored
-/// entirely — it carries no authority, and the account in the info is the
-/// whole answer to "who is this for".
+/// so nothing here is cryptography. The caller principal is ignored: it
+/// carries no authority, and the account in the info is who the call is for.
 module {
 
   let DOMAIN = "notification-sender-info";

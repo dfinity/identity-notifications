@@ -17,6 +17,9 @@ import Types "../src/Types";
 // `Flush.apply`; everything worth checking is on this side of the await.
 
 let HOUR = 3_600_000_000_000;
+let MINUTE = 60_000_000_000;
+/// Internet Identity's default, as the library mirrors it.
+let RETENTION = 5 * MINUTE;
 let CAPACITY = 1_073_741_824;
 
 type World = {
@@ -52,14 +55,15 @@ func message(key : Text, urgency : ?Types.Urgency, expiresAt : ?Int) : Types.Not
 };
 
 func send(w : World, to : Principal, note : Types.Notification, now : Int) {
-  ignore Outbox.add(w.outbox, to, note, now + 24 * HOUR, CAPACITY, now)
+  ignore Outbox.add(w.outbox, to, note, now + RETENTION, CAPACITY, now)
 };
 
 /// One flush: what Internet Identity would answer, applied the way the mixin
 /// applies it.
 func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
+  Outbox.sweep(w.outbox, now);
   Outbox.promote(w.outbox, now);
-  let batch = Outbox.take(w.outbox, w.batchLimit);
+  let (batch, _) = Outbox.sendable(w.outbox, Outbox.take(w.outbox, w.batchLimit), now);
   if (batch.size() == 0) return { sent = 0; accepted = 0 };
 
   let refused = Array.filterMap<Outbox.Entry, II.NotAccepted>(
@@ -91,7 +95,7 @@ func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
       {
         id = entry.id;
         recipient = entry.recipient;
-        reason = #Deferred { retry_after = Nat64.fromNat(Int.abs(now + HOUR)) }
+        reason = #Deferred { retry_after = Nat64.fromNat(Int.abs(now + MINUTE)) }
       }
     }
   );
@@ -205,7 +209,7 @@ do {
   assert flush(w, HOUR + 60).sent == 0;
 
   w.roomPerFlush := 10;
-  let second = flush(w, 2 * HOUR);
+  let second = flush(w, HOUR + MINUTE);
   assert second.sent == 3 and second.accepted == 3;
   assert Outbox.backlog(w.outbox) == 0
 };
@@ -220,8 +224,8 @@ do {
   assert flush(w, HOUR).accepted == 0;
   assert Outbox.backlog(w.outbox) == 1;
 
-  // The second attempt falls just before expiry.
-  let second = flush(w, 2 * HOUR);
+  // The second attempt falls inside the window it is for.
+  let second = flush(w, 2 * HOUR - 1);
   assert second.sent == 1 and second.accepted == 0;
   assert Outbox.backlog(w.outbox) == 0;
   switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "m"))) {
@@ -231,7 +235,8 @@ do {
   assert totals(w).dropped == 1
 };
 
-// Everything accepted is kept until it expires: a pull has to find content.
+// Everything accepted is kept until it expires, because a pull has to find
+// content — and no longer, because nothing will pull it after that.
 do {
   let w = world(10);
   reachable(w, user(0));
@@ -240,6 +245,41 @@ do {
 
   switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "kept"))) {
     case (?content) assert content.title == "New message";
+    case null assert false
+  };
+
+  ignore flush(w, HOUR + RETENTION);
+  switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "kept"))) {
+    case null {};
+    case (?_) assert false
+  }
+};
+
+// A campaign nobody opens does not accumulate: each round's content goes when
+// that round expires, so the canister holds one round rather than every one.
+do {
+  let w = world(10_000);
+  for (i in Nat.range(0, 500)) reachable(w, user(i));
+
+  for (round in Nat.range(0, 4)) {
+    let at = HOUR + round * 2 * RETENTION;
+    for (i in Nat.range(0, 500)) {
+      send(
+        w,
+        user(i),
+        message("campaign-" # Nat.toText(round) # "-" # Nat.toText(i), ?#veryLow, null),
+        at
+      )
+    };
+    assert flush(w, at).accepted == 500
+  };
+
+  switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "campaign-0-0"))) {
+    case null {};
+    case (?_) assert false
+  };
+  switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "campaign-3-0"))) {
+    case (?_) {};
     case null assert false
   }
 };
@@ -262,7 +302,7 @@ do {
       w.outbox,
       user(0),
       message("camp-" # Nat.toText(i), ?#veryLow, null),
-      HOUR + 24 * HOUR,
+      HOUR + RETENTION,
       tiny,
       HOUR
     );
@@ -272,7 +312,7 @@ do {
     w.outbox,
     user(0),
     message("urgent", ?#high, null),
-    HOUR + 24 * HOUR,
+    HOUR + RETENTION,
     tiny,
     HOUR
   );
@@ -324,5 +364,5 @@ do {
 
   assert Outbox.backlog(w.outbox) == 1;
   assert flush(w, HOUR + 60).sent == 0;
-  assert flush(w, 3 * HOUR).accepted == 1
+  assert flush(w, 3 * HOUR - 1).accepted == 1
 }

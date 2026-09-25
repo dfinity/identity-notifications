@@ -4,8 +4,8 @@ import Runtime "mo:core/Runtime";
 import Text "mo:core/Text";
 import Types "../Types";
 
-/// Two environment variables and a default. Read once, because a canister's
-/// environment does not change under it.
+/// Three environment variables, one of them optional. Read on use, because a
+/// canister's environment does not change under it.
 module {
 
   let DEFAULT_CAPACITY_MB : Nat = 1024;
@@ -16,8 +16,7 @@ module {
     capacityBytes : Nat
   };
 
-  /// Missing configuration is a deployment mistake rather than something an
-  /// app can handle, so it is reported rather than guessed at.
+  /// Missing configuration is reported rather than guessed at.
   public func read<system>() : { #ok : Config; #err : Types.Misconfigured } {
     let ?origin = Runtime.envVar<system>("notification_origin") else return #err(#origin);
     if (Text.size(origin) == 0) return #err(#origin);

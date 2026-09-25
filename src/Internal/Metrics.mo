@@ -5,9 +5,8 @@ import Types "../Types";
 
 /// The delivery pipeline, one bucket an hour, thirty days deep.
 ///
-/// Buckets carry the hour they cover, so the ring rolls over lazily: a canister
-/// that sends nothing for a week needs no timer keeping empty buckets
-/// contiguous, and the quiet hours are simply absent.
+/// Buckets carry the hour they cover, so an hour with no traffic is absent
+/// rather than zero-filled.
 module {
 
   let HOUR : Nat = 3_600_000_000_000;

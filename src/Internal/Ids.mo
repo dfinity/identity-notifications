@@ -8,11 +8,9 @@ import Sha256 "mo:sha2/Sha256";
 
 /// Notification ids, which Internet Identity scopes to `(origin, recipient)`.
 ///
-/// A keyed id is derived rather than remembered: the same `(recipient, key)`
-/// always yields the same id, so an update supersedes its predecessor after an
-/// upgrade, after the content has been swept, and after the app has forgotten
-/// it ever sent anything. A table would have to be evicted or grow forever,
-/// and both are wrong.
+/// A keyed id is derived, not remembered: the same `(recipient, key)` always
+/// yields the same id, so an update supersedes its predecessor even after an
+/// upgrade or a sweep.
 module {
 
   /// Separates derived ids from counter ids, so the two spaces cannot collide.
@@ -33,10 +31,8 @@ module {
     KEYED | (leading64(digest) & (KEYED - 1))
   };
 
-  /// Counter ids start from a random offset rather than from one, so two
-  /// canisters sending for the same origin — a relay and its replacement, or
-  /// a deployment that broke the one-sender rule — do not both hand out the
-  /// same low numbers.
+  /// Counter ids start from a random offset, so two canisters sending for one
+  /// origin do not both hand out the same low numbers.
   public func keyless(seed : Nat64, counter : Nat64) : Nat64 {
     (seed +% counter) & (KEYED - 1)
   };

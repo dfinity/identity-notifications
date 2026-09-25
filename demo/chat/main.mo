@@ -62,9 +62,7 @@ persistent actor {
     }
   };
 
-  /// Everyone in the conversation except the sender hears about it, and the
-  /// conversation is what the notification is about — so the next message
-  /// updates that notification rather than adding another beside it.
+  /// Everyone in the conversation except the sender hears about it.
   func post<system>(conversation : Conversation, from : Principal, text : Text) {
     List.add(conversation.messages, { from; text; at = Time.now() });
 

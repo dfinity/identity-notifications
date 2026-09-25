@@ -37,8 +37,8 @@ do {
   assert batch[0].lane == 0
 };
 
-// A refusal parks the entry until just before it expires, and a second
-// refusal drops it along with its content.
+// A refusal parks the entry later in its window, and a second refusal drops
+// it along with its content.
 do {
   let o = Outbox.empty();
   let id = switch (Outbox.add(o, alice, note("x", ?"k", null), 10 * HOUR, 1_000_000, 0)) {
@@ -48,17 +48,18 @@ do {
 
   let first = Outbox.take(o, 10);
   assert first.size() == 1;
-  assert Outbox.park(o, first[0]);
+  assert Outbox.park(o, first[0], 0);
 
   // Not due yet, so a flush sees nothing.
   Outbox.promote(o, HOUR);
   assert Outbox.take(o, 10).size() == 0;
 
-  // Due near its expiry, so it comes back exactly once.
-  Outbox.promote(o, 10 * HOUR);
+  // Due inside its window, so it comes back exactly once.
+  Outbox.promote(o, 7 * HOUR);
   let second = Outbox.take(o, 10);
   assert second.size() == 1;
-  assert not Outbox.park(o, second[0]);
+  assert second[0].dueAt < second[0].expiresAt;
+  assert not Outbox.park(o, second[0], 7 * HOUR);
   switch (Outbox.contentOf(o, id)) { case null {}; case (?_) assert false };
   assert Outbox.backlog(o) == 0
 };
@@ -97,4 +98,43 @@ do {
     };
     case null assert false
   }
+};
+
+// Accepted content is there for a pull until the notification expires, and
+// gone once nothing can pull it.
+do {
+  let o = Outbox.empty();
+  let id = switch (Outbox.add(o, alice, note("x", ?"k", null), HOUR, 1_000_000, 0)) {
+    case (?i) i;
+    case null (0 : Nat64)
+  };
+
+  let batch = Outbox.take(o, 10);
+  Outbox.settle(o, batch[0]);
+  assert Outbox.backlog(o) == 0;
+
+  Outbox.sweep(o, HOUR - 1);
+  assert Outbox.holds(o, id);
+
+  Outbox.sweep(o, HOUR);
+  assert not Outbox.holds(o, id)
+};
+
+// A dismissed notification leaves the outbox rather than being sent without
+// content, and an expired one counts as a drop.
+do {
+  let o = Outbox.empty();
+  ignore Outbox.add(o, alice, note("x", ?"k", null), HOUR, 1_000_000, 0);
+  Outbox.dismiss(o, alice, "k");
+  assert Outbox.backlog(o) == 0;
+
+  let (live, expired) = Outbox.sendable(o, Outbox.take(o, 10), 0);
+  assert live.size() == 0;
+  assert expired == 0;
+
+  ignore Outbox.add(o, alice, note("y", ?"j", null), HOUR, 1_000_000, 0);
+  let (none, one) = Outbox.sendable(o, Outbox.take(o, 10), HOUR);
+  assert none.size() == 0;
+  assert one == 1;
+  assert Outbox.backlog(o) == 0
 }

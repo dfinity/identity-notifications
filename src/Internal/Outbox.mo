@@ -1,9 +1,10 @@
+import Array "mo:core/Array";
 import Int "mo:core/Int";
+import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
-import PriorityQueue "mo:core/PriorityQueue";
 import Blob "mo:core/Blob";
 import Text "mo:core/Text";
 import Time "mo:core/Time";
@@ -13,49 +14,57 @@ import Types "../Types";
 
 /// What is waiting to be sent, and what a channel may still pull.
 ///
-/// Entries live in lanes by urgency while they are ready to go, and in a
-/// parking queue while they wait for the second attempt a refusal earns them.
+/// A notification is in one of three places: in a lane by urgency while it is
+/// ready to go, parked while it waits for a later attempt, or accepted, where
+/// only its content remains until it expires. `entries` says which, so a
+/// repeat of a key finds it in one look.
 module {
 
   public let LANES : Nat = 4;
   public let WEIGHTS : [Nat] = [8, 4, 2, 1];
 
-  /// How long before a notification expires its second attempt is made. Long
-  /// enough that a user has the window to come back, early enough that the
-  /// attempt itself is not refused for being past the expiry.
-  let RETRY_LEAD : Int = 300_000_000_000;
+  /// Where a notification is. `#nowhere` until it is first placed.
+  public type Stage = { #nowhere; #waiting; #parked; #accepted };
+
+  /// Every place it can be put, which is every stage but `#nowhere`.
+  type Destination = { #waiting; #parked; #accepted };
 
   public type Entry = {
     id : Nat64;
     recipient : Principal;
-    lane : Nat;
-    expiresAt : Time.Time;
+    var lane : Nat;
+    var expiresAt : Time.Time;
     var dueAt : Time.Time;
-    var parked : Bool
+    var stage : Stage;
+    /// Its one second attempt has been spent.
+    var retried : Bool
   };
+
+  /// Keyed by the time they come up, so the soonest is the first entry.
+  type Schedule = Map.Map<(Time.Time, Nat64), Entry>;
 
   public type State = {
     ready : LaneQueue.State<Entry>;
-    parked : PriorityQueue.PriorityQueue<Entry>;
+    parked : Schedule;
+    accepted : Schedule;
     content : Map.Map<Nat64, Types.Content>;
-    received : Map.Map<Nat64, Bool>;
-    /// Every notification waiting to be accepted, by id, so a repeat of a key
-    /// updates what is already queued instead of queueing a second attempt.
     entries : Map.Map<Nat64, Entry>;
     var counter : Nat64;
     var idSeed : Nat64;
-    var bytes : Nat
+    var bytes : Nat;
+    var queued : Nat
   };
 
   public func empty() : State = {
     ready = LaneQueue.empty<Entry>(LANES);
-    parked = PriorityQueue.empty<Entry>();
+    parked = Map.empty<(Time.Time, Nat64), Entry>();
+    accepted = Map.empty<(Time.Time, Nat64), Entry>();
     content = Map.empty<Nat64, Types.Content>();
-    received = Map.empty<Nat64, Bool>();
     entries = Map.empty<Nat64, Entry>();
     var counter = 0;
     var idSeed = 0;
-    var bytes = 0
+    var bytes = 0;
+    var queued = 0
   };
 
   public func lane(urgency : ?Types.Urgency) : Nat = switch urgency {
@@ -67,8 +76,6 @@ module {
 
   public func soonestExpiry(a : Entry, b : Entry) : Order.Order = Int.compare(a.expiresAt, b.expiresAt);
 
-  public func soonestDue(a : Entry, b : Entry) : Order.Order = Int.compare(a.dueAt, b.dueAt);
-
   /// Adds a notification, or replaces the one its key already names.
   public func add(
     self : State,
@@ -78,6 +85,8 @@ module {
     capacityBytes : Nat,
     now : Time.Time
   ) : ?Nat64 {
+    sweep(self, now);
+
     let id = switch (notification.key) {
       case (?key) Ids.keyed(recipient, key);
       case null {
@@ -94,7 +103,7 @@ module {
     let size = sizeOf(content);
 
     // Replacing a notification frees what the old one held, so an app that
-    // updates the same key forever occupies one notification's worth of room.
+    // updates one key forever occupies one notification's worth of room.
     switch (Map.get(self.content, Nat64.compare, id)) {
       case (?old) self.bytes -= sizeOf(old);
       case null {}
@@ -112,124 +121,199 @@ module {
       case null defaultExpiry
     };
 
-    // Already waiting — queued, parked or deferred. Its content has just been
-    // replaced, so the entry itself stands: queueing a second one would
-    // attempt the same notification twice.
     switch (Map.get(self.entries, Nat64.compare, id)) {
-      case (?_) return ?id;
-      case null {}
+      // Still on its way out: its content is replaced, the entry stands.
+      case (?entry) {
+        if (entry.stage != #accepted) return ?id;
+        // Accepted, so Internet Identity holds a notification whose content
+        // has just changed. Sending it again replaces that one.
+        entry.lane := lane(notification.urgency);
+        entry.expiresAt := expiresAt;
+        entry.retried := false;
+        place(self, entry, #waiting, now)
+      };
+      case null {
+        let entry : Entry = {
+          id;
+          recipient;
+          var lane = lane(notification.urgency);
+          var expiresAt = expiresAt;
+          var dueAt = now;
+          var stage = #nowhere;
+          var retried = false
+        };
+        Map.add(self.entries, Nat64.compare, id, entry);
+        place(self, entry, #waiting, now)
+      }
     };
 
-    let entry : Entry = {
-      id;
-      recipient;
-      lane = lane(notification.urgency);
-      expiresAt;
-      var dueAt = now;
-      var parked = false
-    };
-    Map.add(self.entries, Nat64.compare, id, entry);
-    LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry);
     ?id
   };
 
-  /// Internet Identity took it. Nothing more to send, so the entry goes; its
-  /// content stays until a channel has had its chance to pull it.
+  /// Internet Identity took it: nothing more to send, and its content waits
+  /// there for a pull until it expires.
   public func settle(self : State, entry : Entry) {
-    Map.remove(self.entries, Nat64.compare, entry.id)
+    place(self, entry, #accepted, entry.expiresAt)
   };
 
-  /// Moves parked entries back into their lanes once their second attempt is
-  /// due, so a flush only ever sees what it may send now.
+  /// One more attempt, later in the notification's window. `false` when this
+  /// was that attempt and the notification is now dropped.
+  public func park(self : State, entry : Entry, now : Time.Time) : Bool {
+    if (entry.retried) {
+      forget(self, entry.id);
+      return false
+    };
+    entry.retried := true;
+    place(self, entry, #parked, retryAt(now, entry.expiresAt));
+    true
+  };
+
+  /// Internet Identity asked for this one later. Not a refusal, so it does not
+  /// spend the second attempt.
+  public func defer(self : State, entry : Entry, retryAfter : Time.Time) {
+    place(self, entry, #parked, retryAfter)
+  };
+
+  /// Nothing was enqueued; the entry goes back unchanged.
+  public func requeue(self : State, entry : Entry, now : Time.Time) {
+    place(self, entry, #waiting, now)
+  };
+
+  /// Returns parked entries to their lanes once they are due.
   public func promote(self : State, now : Time.Time) {
-    label promoting loop {
-      switch (PriorityQueue.peek(self.parked)) {
-        case (?entry) {
-          if (entry.dueAt > now) break promoting;
-          ignore PriorityQueue.pop(self.parked, furthestDue);
-          LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry)
-        };
-        case null break promoting
-      }
+    for (entry in due(self.parked, now).values()) {
+      place(self, entry, #waiting, now)
     }
   };
 
   public func take(self : State, count : Nat) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);
 
-  /// A refusal earns one more attempt, just before the notification expires,
-  /// which is the whole window the user has to sign in or turn notifications
-  /// on. A second refusal drops it.
-  public func park(self : State, entry : Entry) : Bool {
-    if (entry.parked) {
-      Map.remove(self.entries, Nat64.compare, entry.id);
-      release(self, entry.id);
-      return false
+  /// What a batch may still be sent: anything past its expiry would be refused
+  /// by Internet Identity, and anything the app has since dismissed is no
+  /// longer wanted. Only an expiry counts as a drop.
+  public func sendable(self : State, batch : [Entry], now : Time.Time) : ([Entry], Nat) {
+    let live = List.empty<Entry>();
+    var expired = 0;
+
+    for (entry in batch.values()) {
+      if (entry.expiresAt <= now) {
+        forget(self, entry.id);
+        expired += 1
+      } else if (holds(self, entry.id)) {
+        List.add(live, entry)
+      }
     };
-    entry.parked := true;
-    entry.dueAt := entry.expiresAt - RETRY_LEAD;
-    PriorityQueue.push(self.parked, furthestDue, entry);
-    true
+
+    (List.toArray(live), expired)
   };
 
-  /// Deferral is Internet Identity asking for the same entry later, not a
-  /// refusal, so the entry goes back to its lane with a new due time.
-  public func defer(self : State, entry : Entry, retryAfter : Time.Time) {
-    entry.dueAt := retryAfter;
-    PriorityQueue.push(self.parked, furthestDue, entry)
+  /// Drops what an expired notification was still holding. Internet Identity
+  /// will not pull content it can no longer deliver.
+  public func sweep(self : State, now : Time.Time) {
+    for (entry in due(self.accepted, now).values()) {
+      forget(self, entry.id)
+    }
   };
 
-  /// Puts an entry back in its lane unchanged, for when nothing was enqueued
-  /// and the send simply has to happen again.
-  public func requeue(self : State, entry : Entry) {
-    LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry)
-  };
-
-  /// The app says this no longer needs anyone's attention. The content goes,
-  /// so a pull finds nothing and a channel that sweeps can close it.
+  /// The app says this no longer needs anyone's attention: it leaves the
+  /// outbox, and its content goes so a pull finds nothing.
   public func dismiss(self : State, recipient : Principal, key : Text) {
-    release(self, Ids.keyed(recipient, key))
+    forget(self, Ids.keyed(recipient, key))
   };
 
-  /// A channel delivered it. Recorded rather than acted on: other devices may
-  /// still pull the same notification, so content stays until it expires.
-  public func markReceived(self : State, id : Nat64) {
-    Map.add(self.received, Nat64.compare, id, true)
-  };
+  public func contentOf(self : State, id : Nat64) : ?Types.Content = Map.get(self.content, Nat64.compare, id);
 
-  public func wasReceived(self : State, id : Nat64) : Bool = switch (Map.get(self.received, Nat64.compare, id)) {
+  /// `false` when there is no such notification to have received.
+  public func holds(self : State, id : Nat64) : Bool = switch (Map.get(self.content, Nat64.compare, id)) {
     case (?_) true;
     case null false
   };
 
-  public func release(self : State, id : Nat64) {
+  /// Notifications waiting for Internet Identity to accept them.
+  public func backlog(self : State) : Nat = self.queued;
+
+  /// Once only, from the first flush.
+  public func seed(self : State, randomness : Blob) {
+    if (self.idSeed == 0) self.idSeed := Ids.seedFrom(randomness)
+  };
+
+  /// When the second attempt a refusal earns is made: late enough to leave the
+  /// user most of the window to sign in or turn notifications on, early enough
+  /// that a five-minute notification still gets the attempt.
+  func retryAt(now : Time.Time, expiresAt : Time.Time) : Time.Time {
+    if (expiresAt <= now) return now;
+    now + (expiresAt - now) * 2 / 3
+  };
+
+  /// Puts an entry in one of the three places and takes it out of the one it
+  /// was in. A lane is left to `take`, which pops what it hands out.
+  func place(self : State, entry : Entry, stage : Destination, at : Time.Time) {
+    switch (entry.stage) {
+      case (#parked) Map.remove(self.parked, byTime, (entry.dueAt, entry.id));
+      case (#accepted) Map.remove(self.accepted, byTime, (entry.expiresAt, entry.id));
+      case (#nowhere or #waiting) {}
+    };
+
+    let wasQueued = queued(entry.stage);
+    entry.stage := stage;
+    entry.dueAt := at;
+
+    switch stage {
+      case (#waiting) LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry);
+      case (#parked) Map.add(self.parked, byTime, (at, entry.id), entry);
+      case (#accepted) Map.add(self.accepted, byTime, (entry.expiresAt, entry.id), entry)
+    };
+
+    if (queued(stage) and not wasQueued) self.queued += 1;
+    if (wasQueued and not queued(stage)) self.queued -= 1
+  };
+
+  /// Takes a notification out of every place it is in, content included.
+  func forget(self : State, id : Nat64) {
+    switch (Map.get(self.entries, Nat64.compare, id)) {
+      case (?entry) {
+        switch (entry.stage) {
+          case (#parked) Map.remove(self.parked, byTime, (entry.dueAt, entry.id));
+          case (#accepted) Map.remove(self.accepted, byTime, (entry.expiresAt, entry.id));
+          case (#nowhere or #waiting) {}
+        };
+        if (queued(entry.stage)) self.queued -= 1;
+        Map.remove(self.entries, Nat64.compare, id)
+      };
+      case null {}
+    };
+    release(self, id)
+  };
+
+  /// Everything in a schedule whose time has come, soonest first.
+  func due(schedule : Schedule, now : Time.Time) : [Entry] {
+    let ready = List.empty<Entry>();
+    label scanning for (((at, _), entry) in Map.entries(schedule)) {
+      if (at > now) break scanning;
+      List.add(ready, entry)
+    };
+    List.toArray(ready)
+  };
+
+  func queued(stage : Stage) : Bool = stage == #waiting or stage == #parked;
+
+  func byTime(a : (Time.Time, Nat64), b : (Time.Time, Nat64)) : Order.Order = switch (Int.compare(a.0, b.0)) {
+    case (#equal) Nat64.compare(a.1, b.1);
+    case (order) order
+  };
+
+  func release(self : State, id : Nat64) {
     switch (Map.get(self.content, Nat64.compare, id)) {
       case (?content) {
         self.bytes -= sizeOf(content);
-        Map.remove(self.content, Nat64.compare, id);
-        Map.remove(self.received, Nat64.compare, id)
+        Map.remove(self.content, Nat64.compare, id)
       };
       case null {}
     }
   };
 
-  /// Once only, from the first flush: everything sent before it simply counts
-  /// from zero, which is where every canister used to start.
-  public func seed(self : State, randomness : Blob) {
-    if (self.idSeed == 0) self.idSeed := Ids.seedFrom(randomness)
-  };
-
-  public func contentOf(self : State, id : Nat64) : ?Types.Content = Map.get(self.content, Nat64.compare, id);
-
-  public func backlog(self : State) : Nat = LaneQueue.size(self.ready) + PriorityQueue.size(self.parked);
-
   /// Nothing accepted is ever shed: Internet Identity may still deliver it and
-  /// a pull has to find content. What goes is the outbox, and the lowest lane
-  /// first — a campaign's entries before the notification behind them.
-  ///
-  /// Within a lane the choice is whatever the lane's order yields. A heap can
-  /// only be popped in the order it was built, and rummaging for the newest
-  /// entry would cost more than the byte it frees; in the case this exists for,
-  /// a campaign, every entry shares an expiry anyway.
+  /// a pull has to find content. What goes is the outbox, lowest lane first.
   func shed(self : State, capacityBytes : Nat, needed : Nat) : Bool {
     var lane = LANES;
     while (lane > 0) {
@@ -240,22 +324,13 @@ module {
 
         let victims = LaneQueue.take<Entry>(self.ready, laneOnly(lane), 1, soonestExpiry);
         if (victims.size() == 0) break shedding;
-        Map.remove(self.entries, Nat64.compare, victims[0].id);
-        release(self, victims[0].id)
+        forget(self, victims[0].id)
       }
     };
     self.bytes + needed <= capacityBytes
   };
 
-  func laneOnly(lane : Nat) : [Nat] {
-    let weights : [var Nat] = [var 0, 0, 0, 0];
-    weights[lane] := 1;
-    Array_freeze(weights)
-  };
-
-  func Array_freeze(weights : [var Nat]) : [Nat] = [weights[0], weights[1], weights[2], weights[3]];
-
-  func furthestDue(a : Entry, b : Entry) : Order.Order = Int.compare(a.dueAt, b.dueAt);
+  func laneOnly(only : Nat) : [Nat] = Array.tabulate<Nat>(LANES, func(lane) = if (lane == only) 1 else 0);
 
   func sizeOf(content : Types.Content) : Nat = Text.size(content.title) + Text.size(content.body) + (
     switch (content.url) { case (?u) Text.size(u); case null 0 }

@@ -30,18 +30,17 @@ import Types "Types";
 /// `notification_origin`, and optionally `notification_capacity_mb`.
 mixin<system>() {
 
-  /// Long enough that a busy canister batches instead of calling per message,
-  /// short enough that nobody notices. Everything waits for it, urgency
-  /// included: urgency decides which lane drains first, not whether a call
-  /// happens now, and an app that marked everything urgent would otherwise
-  /// lose the batching altogether.
+  /// How long sends accumulate before one call carries them. Urgency decides
+  /// which lane drains first, not call timing, so everything waits for it.
   let COALESCE : Nat = 2_000_000_000;
 
-  /// What Internet Identity accepts in one call today. It corrects us with
-  /// `TooManyNotifications`, and we believe it from then on.
+  /// What Internet Identity accepts in one call, until `TooManyNotifications`
+  /// says otherwise.
   let BATCH_GUESS : Nat = 1_000;
 
-  let DEFAULT_RETENTION : Int = 86_400_000_000_000;
+  /// Internet Identity's own default, mirrored so the outbox orders and
+  /// expires notifications by the window they actually have.
+  let II_DEFAULT_RETENTION : Int = 300_000_000_000;
 
   let configured = Config.read<system>();
   transient let randomness = actor "aaaaa-aa" : actor {
@@ -74,7 +73,7 @@ mixin<system>() {
             outbox,
             recipient,
             notification,
-            now + DEFAULT_RETENTION,
+            now + II_DEFAULT_RETENTION,
             config.capacityBytes,
             now
           );
@@ -100,12 +99,10 @@ mixin<system>() {
   };
 
   /// Called by Internet Identity, not by the app, once a channel has a
-  /// notification to render. The IC has already verified who signed the
-  /// caller info; what is left is whether we trust them.
+  /// notification to render.
   ///
-  /// An update rather than a query, and not by choice: Motoko cannot read
-  /// caller info from a query at all, and without it there is no way to tell
-  /// who is asking, so a query would hand any notification's content to
+  /// An update rather than a query because Motoko cannot read caller info from
+  /// a query, and without it a pull would hand any notification's content to
   /// anyone who guessed its id.
   public shared func _internet_identity_notification_content(
     id : Nat64
@@ -114,12 +111,13 @@ mixin<system>() {
     Outbox.contentOf(outbox, id)
   };
 
-  /// Delivered. Recorded rather than acted on: content stays until it expires,
-  /// because other devices may still pull it.
+  /// Delivered. Content stays until it expires, because another of the user's
+  /// devices may still pull it.
   public shared func _internet_identity_notification_received(id : Nat64) : async () {
     let ?_ = senderInfo<system>() else return;
-    Outbox.markReceived(outbox, id);
-    Metrics.record(pipeline, Time.now(), #received, 1)
+    if (Outbox.holds(outbox, id)) {
+      Metrics.record(pipeline, Time.now(), #received, 1)
+    }
   };
 
   /// Internet Identity signed this call's caller info, and it names our own
@@ -161,16 +159,14 @@ mixin<system>() {
       seeded := true;
       try {
         Outbox.seed(outbox, await randomness.raw_rand())
-      } catch (_) {
-        // Without it ids start from zero, which is only a problem for a
-        // deployment that already broke the one-sender rule.
-        seeded := true
-      }
+      } catch (_) {}
     };
 
     let now = Time.now();
+    Outbox.sweep(outbox, now);
     Outbox.promote(outbox, now);
-    let batch = Outbox.take(outbox, batchLimit);
+    let (batch, expired) = Outbox.sendable(outbox, Outbox.take(outbox, batchLimit), now);
+    if (expired > 0) Metrics.record(pipeline, now, #dropped, expired);
     if (batch.size() == 0) return;
 
     flushing := true;

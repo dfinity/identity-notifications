@@ -6,13 +6,12 @@ import PriorityQueue "mo:core/PriorityQueue";
 /// A queue whose items sit in lanes and are taken from them in weighted
 /// cycles, so no lane starves however busy another one is.
 ///
-/// Generic over what it carries: the lane an item belongs to and the order
-/// within a lane are decided by the caller, which is what keeps `State`
-/// plain data and therefore stable across upgrades.
+/// The lane an item belongs to and the order within a lane are the caller's,
+/// which keeps `State` plain data and therefore stable across upgrades.
 ///
-/// `compare` reads as it does everywhere else — ascending — and the smallest
-/// item leads its lane. Core's `PriorityQueue` pops the greatest, so the
-/// comparator is inverted here rather than in every caller.
+/// `compare` is ascending, as everywhere else, and the smallest item leads its
+/// lane. Core's `PriorityQueue` pops the greatest, so the comparator is
+/// inverted here rather than in every caller.
 module {
 
   public type State<T> = {
