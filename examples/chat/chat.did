@@ -1,0 +1,45 @@
+// One hour of the delivery pipeline.
+type Bucket = record {
+  dropped : nat64;
+  sent : nat64;
+  // The instant the hour begins, nanoseconds since the epoch.
+  start : nat64;
+  accepted : nat64;
+  received : nat64;
+  deferred : nat64;
+};
+// What a channel pulls back. The rest of a [`Notification`] never leaves this
+// canister.
+type Content = record { url : opt text; title : text; body : text };
+type Message = record { at : nat64; from : principal; "text" : text };
+type Metrics = record {
+  misconfigured : opt MisconfiguredSince;
+  // Up to 720 buckets, oldest first. Hours with no traffic are absent.
+  hours : vec Bucket;
+  // Notifications waiting for Internet Identity to accept them.
+  backlog : nat64;
+};
+type Misconfigured = variant {
+  // `internet_identity` is unset or not a principal.
+  InternetIdentity;
+  // `notification_origin` is unset or empty.
+  Origin;
+  // The origin does not publish this canister as one of its senders.
+  NotAuthorizedSender;
+};
+type MisconfiguredSince = record { why : Misconfigured; since : nat64 };
+service : () -> {
+  _internet_identity_notification_content : (nat64) -> (opt Content) query;
+  _internet_identity_notification_received : (nat64) -> ();
+  create_group : (text, vec principal) -> (text);
+  // A month of hourly buckets in one reply — some 30KB, so a dashboard takes the
+  // lot and slices it client-side.
+  delivery_metrics : () -> (Metrics) query;
+  // Read state is a marker: it moves forward as they read and back when they
+  // mark something unread again. The notification is stale only once nothing in
+  // the conversation is unread.
+  mark_read : (text, nat64) -> ();
+  messages : (text) -> (vec Message) query;
+  send_direct : (principal, text) -> ();
+  send_to_group : (text, text) -> ();
+}

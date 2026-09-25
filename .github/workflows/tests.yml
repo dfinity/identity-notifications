@@ -21,3 +21,5 @@ jobs:
       - run: cargo test --all-features
       - name: Build the example canister
         run: cargo build --release --target wasm32-unknown-unknown -p chat-example
+      - name: Check the example's candid is current
+        run: cargo test -p chat-example candid_is_up_to_date

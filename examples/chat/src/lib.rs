@@ -19,7 +19,7 @@ struct Message {
     at: u64,
 }
 
-#[derive(Default, CandidType, Serialize, Deserialize)]
+#[derive(Clone, Default, CandidType, Serialize, Deserialize)]
 struct Conversation {
     members: Vec<Principal>,
     messages: Vec<Message>,
@@ -150,12 +150,17 @@ fn title(id: &str, from: Principal) -> String {
 #[init]
 fn init() {}
 
+/// The app's own state and the library's, saved together. Skipping the
+/// library's half would leave pending notifications without content, so a
+/// channel would pull and find nothing.
+type Saved = (Vec<(String, Conversation)>, notifications::Snapshot);
+
 #[pre_upgrade]
 fn pre_upgrade() {
     let chats = CHATS.with_borrow(|chats| {
         chats
             .iter()
-            .map(|(id, conversation)| (id.clone(), conversation.members.clone()))
+            .map(|(id, conversation)| (id.clone(), conversation.clone()))
             .collect::<Vec<_>>()
     });
     ic_cdk::storage::stable_save((chats, notifications::snapshot()))
@@ -164,23 +169,32 @@ fn pre_upgrade() {
 
 #[post_upgrade]
 fn post_upgrade() {
-    type Saved = (
-        Vec<(String, Vec<Principal>)>,
-        identity_notifications::internal::outbox::Snapshot,
-    );
-
     if let Ok((chats, snapshot)) = ic_cdk::storage::stable_restore::<Saved>() {
-        CHATS.with_borrow_mut(|store| {
-            for (id, members) in chats {
-                store.insert(
-                    id,
-                    Conversation {
-                        members,
-                        messages: Vec::new(),
-                    },
-                );
-            }
-        });
+        CHATS.with_borrow_mut(|store| store.extend(chats));
         notifications::restore(snapshot);
+    }
+}
+
+ic_cdk::export_candid!();
+
+#[cfg(test)]
+mod tests {
+    /// Writes `chat.did` beside the crate, so the interface in the repo is the
+    /// one the code exports rather than one somebody hand-edited.
+    #[test]
+    fn candid_is_up_to_date() {
+        let exported = super::__export_service();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chat.did");
+
+        if std::env::var("BLESS").is_ok() {
+            std::fs::write(&path, &exported).expect("writing chat.did");
+        }
+
+        let committed = std::fs::read_to_string(&path).expect("chat.did should exist");
+        assert_eq!(
+            committed.trim(),
+            exported.trim(),
+            "chat.did is stale — rerun with BLESS=1"
+        );
     }
 }

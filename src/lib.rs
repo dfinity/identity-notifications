@@ -33,6 +33,7 @@ use internal::config::{self, Config};
 use internal::flush::{self, Outcome};
 use internal::ii;
 use internal::metrics::{Event, Pipeline};
+pub use internal::outbox::Snapshot;
 use internal::outbox::{Entry, Outbox};
 use std::cell::RefCell;
 use std::time::Duration;
@@ -149,14 +150,18 @@ pub fn notification_received(id: NotificationId) {
 #[macro_export]
 macro_rules! endpoints {
     () => {
-        #[::ic_cdk::query]
-        fn _internet_identity_notification_content(
-            id: u64,
-        ) -> ::core::option::Option<$crate::types::Content> {
+        // The type is imported rather than named in the signature, and
+        // `ic_cdk` is left unqualified, because `ic_cdk::export_candid!`
+        // re-parses these signatures and chokes on a leading `::` — which is
+        // exactly what `$crate` expands to.
+        use $crate::types::Content as IiNotificationContent;
+
+        #[ic_cdk::query]
+        fn _internet_identity_notification_content(id: u64) -> Option<IiNotificationContent> {
             $crate::notification_content(id)
         }
 
-        #[::ic_cdk::update]
+        #[ic_cdk::update]
         fn _internet_identity_notification_received(id: u64) {
             $crate::notification_received(id)
         }
@@ -165,8 +170,8 @@ macro_rules! endpoints {
 
 /// Everything the library holds, for an app to carry across an upgrade in its
 /// own `pre_upgrade`/`post_upgrade`.
-pub fn snapshot() -> internal::outbox::Snapshot {
-    STATE.with_borrow(|state| internal::outbox::Snapshot {
+pub fn snapshot() -> Snapshot {
+    STATE.with_borrow(|state| Snapshot {
         outbox: state.outbox.export(),
         pipeline: state.pipeline.clone(),
         batch_limit: state.batch_limit,
@@ -176,7 +181,7 @@ pub fn snapshot() -> internal::outbox::Snapshot {
 
 /// Restores a [`snapshot`]. Anything not restored simply starts empty, which
 /// costs pending notifications their content, so do restore it.
-pub fn restore(snapshot: internal::outbox::Snapshot) {
+pub fn restore(snapshot: Snapshot) {
     STATE.with_borrow_mut(|state| {
         state.outbox = Outbox::import(snapshot.outbox);
         state.pipeline = snapshot.pipeline;
