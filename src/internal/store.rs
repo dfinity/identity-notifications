@@ -1,12 +1,4 @@
 //! Everything the library holds, in stable memory.
-//!
-//! Nothing lives in the heap, so nothing is serialised on upgrade: a canister
-//! with a campaign's worth of pending content upgrades in the same time as an
-//! idle one, and `pre_upgrade` has nothing to run out of instructions doing.
-//!
-//! The maps are ordered by their keys' bytes, which is what replaces the
-//! heaps an in-memory version would need: taking a batch is a range scan per
-//! lane, and the order survives an upgrade because it was never stored.
 
 use super::ids;
 use super::keys::EntryKey;
@@ -22,18 +14,9 @@ use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// The stable memories the library keeps its state in.
-///
-/// `content` is separate from the two entry maps because its values are up to
-/// 8KB while an entry is 64 bytes, and a `StableBTreeMap` sizes its nodes from
-/// the value bound — one map would make every entry carry the larger one.
-/// `outbox` and `parked` are separate because they are ordered differently,
-/// by `(lane, expires_at, id)` and by `(due_at, id)`; they could share a map
-/// behind a discriminant byte, which would save one id out of 255 and cost a
-/// subtler encoding. The app says which id
-/// each one gets, so what it is giving up is written at the call site — and a
-/// version that needs another memory adds a field here, which stops the app
-/// compiling instead of quietly taking an id it was already using.
+/// The stable memories the library keeps its state in. Three, because content
+/// runs to 8KB where an entry is 64 bytes and a `StableBTreeMap` sizes its
+/// nodes from the value bound; everything else shares a map.
 #[derive(Clone, Copy, Debug)]
 pub struct Memories {
     /// Notifications waiting to be sent, or waiting for a second attempt.
@@ -47,9 +30,7 @@ pub struct Memories {
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
 const LANES: u8 = 4;
 
-/// How long before a notification expires its second attempt is made. Long
-/// enough that a user has the window to come back, early enough that the
-/// attempt itself is not refused for being past the expiry.
+/// How far before its expiry a refused notification is tried again.
 const RETRY_LEAD: u64 = 300_000_000_000;
 
 const HOUR: u64 = 3_600_000_000_000;
@@ -111,8 +92,7 @@ impl Storable for Entry {
     }
 }
 
-/// Candid for the two structures whose shape may grow: the content an app
-/// wrote, and the counters the library keeps.
+/// Candid for the values whose shape may grow.
 macro_rules! candid_storable {
     ($type:ty, $max:expr) => {
         impl Storable for $type {
@@ -136,15 +116,13 @@ macro_rules! candid_storable {
     };
 }
 
-/// A notification an app wrote. Bounded so the map can index it, and generous
-/// enough that no realistic notification is refused for length.
+/// Bounded so the map can index it, and past any realistic notification.
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct StoredContent(pub Content);
 candid_storable!(StoredContent, 8_192);
 
-/// The metrics map holds one of these per row: an hour of the pipeline, or —
-/// under the reserved key `COUNTERS_ROW` — the library's own counters. Hour
-/// zero is the epoch and never a real bucket, so the key is free to take.
+/// A row of the metrics map: an hour of the pipeline, or the library's
+/// counters under `COUNTERS_ROW`. Hour zero is the epoch, so never a bucket.
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     Hour(Bucket),
@@ -226,8 +204,6 @@ impl Store {
         };
         let size = size_of_content(&content);
 
-        // Replacing frees what the old one held, so an app that updates the
-        // same key forever occupies one notification's worth of room.
         if let Some(StoredContent(old)) = self.content.get(&id) {
             meta.bytes = meta.bytes.saturating_sub(size_of_content(&old));
         }
@@ -244,9 +220,7 @@ impl Store {
         meta.bytes += size;
         self.set_meta(meta);
 
-        // Already waiting — queued, parked or deferred. Its content has just
-        // been replaced, so the entry itself stands: queueing a second one
-        // would attempt the same notification twice.
+        // Already waiting: its content is replaced, the entry stands.
         if self.is_waiting(id) {
             return Some(id);
         }
@@ -264,8 +238,7 @@ impl Store {
         Some(id)
     }
 
-    /// Moves parked entries back into their lanes once they are due, so a
-    /// flush only ever sees what it may send now.
+    /// Returns parked entries to their lanes once they are due.
     pub fn promote(&mut self, now: u64) {
         let due: Vec<(EntryKey, Entry)> = self
             .entries
@@ -279,9 +252,8 @@ impl Store {
         }
     }
 
-    /// A batch, drained from the lanes in weighted cycles: `WEIGHTS[lane]`
-    /// from each per cycle, an empty lane donating its turns, and the soonest
-    /// expiry leading its lane.
+    /// A batch, in weighted cycles: `WEIGHTS[lane]` per lane per cycle, an
+    /// empty lane donating its turns, soonest expiry leading its lane.
     pub fn take(&mut self, count: usize) -> Vec<Entry> {
         let mut taken = Vec::new();
         let mut cursors: Vec<Option<EntryKey>> = (0..LANES)
@@ -325,13 +297,11 @@ impl Store {
         taken
     }
 
-    /// Internet Identity took it. Nothing more to send; its content stays
-    /// until a channel has had its chance to pull it.
+    /// Internet Identity took it; its content stays until it expires.
     pub fn settle(&mut self, _entry: &Entry) {}
 
-    /// A refusal earns one more attempt, just before the notification expires,
-    /// which is the whole window the user has to sign in or turn notifications
-    /// on. A second refusal drops it. `false` when it was dropped.
+    /// One more attempt, just before the notification expires. `false` when
+    /// this was that attempt and the notification is now dropped.
     pub fn park(&mut self, mut entry: Entry) -> bool {
         if entry.parked {
             self.release(entry.id);
@@ -344,21 +314,19 @@ impl Store {
         true
     }
 
-    /// Deferral is Internet Identity asking for the same entry later, not a
-    /// refusal, so it waits and comes back unchanged.
+    /// Internet Identity asked for this one later.
     pub fn defer(&mut self, mut entry: Entry, retry_after: u64) {
         entry.due_at = retry_after;
         self.entries.insert(entry.parked_key(), entry);
     }
 
-    /// Nothing was enqueued, so the entry goes back where it came from.
+    /// Nothing was enqueued; the entry goes back unchanged.
     pub fn requeue(&mut self, mut entry: Entry, now: u64) {
         entry.due_at = now;
         self.entries.insert(entry.waiting_key(), entry);
     }
 
-    /// Anything past its expiry is discarded rather than sent, since Internet
-    /// Identity would refuse it anyway.
+    /// Discards what is past its expiry; Internet Identity would refuse it.
     pub fn drop_expired(&mut self, batch: Vec<Entry>, now: u64) -> (Vec<Entry>, usize) {
         let before = batch.len();
         let live: Vec<Entry> = batch
@@ -376,8 +344,7 @@ impl Store {
         (live, dropped)
     }
 
-    /// The app says this no longer needs anyone's attention. The content goes,
-    /// so a pull finds nothing and a channel that sweeps can close it.
+    /// Drops the content, so a pull finds nothing.
     pub fn dismiss(&mut self, recipient: Principal, key: &str) {
         self.release(ids::keyed(recipient, key));
     }
@@ -444,7 +411,7 @@ impl Store {
 
         self.rows.insert(start, Row::Hour(bucket));
 
-        // One row is the counters, which never counts towards the window.
+        // One row is the counters rather than an hour.
         while self.rows.len() as usize > KEEP_HOURS + 1 {
             let oldest = self
                 .rows
@@ -470,8 +437,7 @@ impl Store {
             .collect()
     }
 
-    /// A receipt is recorded only while the content is still there; content
-    /// stays until it expires, because other devices may still pull it.
+    /// `false` when there is no such notification to have received.
     pub fn mark_received(&mut self, id: NotificationId) -> bool {
         self.content.contains_key(&id)
     }
@@ -488,9 +454,8 @@ impl Store {
         }
     }
 
-    /// Nothing accepted is ever shed: Internet Identity may still deliver it
-    /// and a pull has to find content. What goes is the outbox, and the lowest
-    /// lane first — a campaign's entries before the notification behind them.
+    /// Sheds the outbox, lowest lane first. Never accepted content: a pull
+    /// has to find it.
     fn shed(&mut self, mut bytes: u64, capacity_bytes: u64, needed: u64) -> u64 {
         for lane in (0..LANES).rev() {
             while bytes + needed > capacity_bytes {
@@ -554,10 +519,13 @@ mod tests {
     }
 
     fn note(title: &str, key: Option<&str>, urgency: Option<Urgency>) -> Notification {
-        let mut notification = Notification::new(title, "body");
-        notification.key = key.map(str::to_string);
-        notification.urgency = urgency;
-        notification
+        Notification {
+            title: title.into(),
+            body: "body".into(),
+            key: key.map(str::to_string),
+            urgency,
+            ..Default::default()
+        }
     }
 
     #[test]

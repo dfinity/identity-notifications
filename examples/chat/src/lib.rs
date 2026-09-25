@@ -134,9 +134,15 @@ fn post(id: &str, from: Principal, text: String) {
     for member in members.into_iter().filter(|member| *member != from) {
         notifications::send(
             member,
-            Notification::new(title(id, from), text.clone())
-                .url(format!("https://chat.example.com/c/{id}"))
-                .key(id),
+            Notification {
+                title: title(id, from),
+                body: text.clone(),
+                url: Some(format!("https://chat.example.com/c/{id}")),
+                // Names what this is about, so the next message updates this
+                // notification rather than stacking another beside it.
+                key: Some(id.to_string()),
+                ..Default::default()
+            },
         );
     }
 }

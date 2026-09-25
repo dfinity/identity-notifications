@@ -1,15 +1,8 @@
 //! The key for the entry map.
 //!
-//! `ic-stable-structures` orders a map by the bytes a key encodes to, so each
-//! field goes in big-endian and in the order it should sort by. That is what
-//! replaces the heaps an in-memory version would need: taking a batch is a
-//! range scan, and the ordering survives an upgrade because it was never
-//! stored.
-//!
-//! Waiting and parked entries share one map, told apart by the leading byte.
-//! Because it leads, each kind occupies its own contiguous range and can be
-//! ordered by whatever suits it: waiting entries by lane and expiry, parked
-//! entries by when they are next due.
+//! A map is ordered by the bytes its key encodes to, so fields go big-endian
+//! in the order they should sort by. The leading byte separates waiting from
+//! parked entries, which is what lets one map order each kind differently.
 
 use ic_stable_structures::storable::{Bound, Storable};
 use std::borrow::Cow;

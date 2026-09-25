@@ -16,18 +16,19 @@ pub enum Urgency {
 
 /// What the app describes when it sends.
 ///
-/// Build it with [`Notification::new`] and the setters, which spares you the
-/// fields you do not care about:
-///
 /// ```
 /// use identity_notifications::{Notification, Urgency};
 ///
-/// let notification = Notification::new("New message", "See you at six")
-///     .url("https://chat.example.com/chats/alice")
-///     .key("chat-alice")
-///     .urgency(Urgency::High);
+/// let notification = Notification {
+///     title: "New message".into(),
+///     body: "See you at six".into(),
+///     url: Some("https://chat.example.com/chats/alice".into()),
+///     key: Some("chat-alice".into()),
+///     urgency: Some(Urgency::High),
+///     ..Default::default()
+/// };
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Notification {
     pub title: String,
     pub body: String,
@@ -38,43 +39,11 @@ pub struct Notification {
     /// updates that notification rather than adding another, and it is what
     /// [`crate::dismiss`] names. Derive it from data the sender cannot choose.
     pub key: Option<String>,
+    /// `None` is [`Urgency::Normal`].
     pub urgency: Option<Urgency>,
     /// `None` is Internet Identity's default retention, which is also its
     /// ceiling. Nanoseconds since the epoch.
     pub expires_at: Option<u64>,
-}
-
-impl Notification {
-    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Self {
-            title: title.into(),
-            body: body.into(),
-            url: None,
-            key: None,
-            urgency: None,
-            expires_at: None,
-        }
-    }
-
-    pub fn url(mut self, url: impl Into<String>) -> Self {
-        self.url = Some(url.into());
-        self
-    }
-
-    pub fn key(mut self, key: impl Into<String>) -> Self {
-        self.key = Some(key.into());
-        self
-    }
-
-    pub fn urgency(mut self, urgency: Urgency) -> Self {
-        self.urgency = Some(urgency);
-        self
-    }
-
-    pub fn expires_at(mut self, expires_at: u64) -> Self {
-        self.expires_at = Some(expires_at);
-        self
-    }
 }
 
 /// What a channel pulls back. The rest of a [`Notification`] never leaves this

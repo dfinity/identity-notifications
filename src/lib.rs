@@ -15,9 +15,13 @@
 //!     // ... store the message ...
 //!     notifications::send(
 //!         to,
-//!         Notification::new("New message", text)
-//!             .url("https://chat.example.com/chats")
-//!             .key("chat-alice"),
+//!         Notification {
+//!             title: "New message".into(),
+//!             body: text,
+//!             url: Some("https://chat.example.com/chats".into()),
+//!             key: Some("chat-alice".into()),
+//!             ..Default::default()
+//!         },
 //!     );
 //! }
 //! ```
@@ -47,15 +51,11 @@ pub use types::{
     SenderInfo, Urgency,
 };
 
-/// Long enough that a busy canister batches instead of calling per message,
-/// short enough that nobody notices. Everything waits for it, urgency
-/// included: urgency decides which lane drains first, not whether a call
-/// happens now, and an app that marked everything urgent would otherwise lose
-/// the batching altogether.
+/// How long sends accumulate before one call carries them. Everything waits
+/// for it, urgency included: urgency decides lane order, not call timing.
 const COALESCE: Duration = Duration::from_secs(2);
 
-/// What Internet Identity accepts in one call today. It corrects us with
-/// `TooManyNotifications`, and we believe it from then on.
+/// Until `TooManyNotifications` says otherwise.
 const BATCH_GUESS: usize = 1_000;
 
 const DEFAULT_RETENTION: u64 = 86_400_000_000_000;
@@ -68,14 +68,10 @@ thread_local! {
     static FLUSHING: RefCell<bool> = const { RefCell::new(false) };
 }
 
-/// Hands the library the stable memories it keeps everything in. Every one is
-/// named, so what the library is taking is written at the call site rather
-/// than hidden behind a count — and a version that needs another memory adds a
-/// field, which stops this compiling instead of quietly taking an id you were
-/// already using.
+/// Hands the library the stable memories it keeps everything in.
 ///
-/// Call it from `#[init]` **and** `#[post_upgrade]`. Nothing is serialised on
-/// upgrade and nothing is restored: the maps are already where they were.
+/// Call it from `#[init]` **and** `#[post_upgrade]`. Nothing is serialised or
+/// restored on upgrade: the maps are already where they were.
 ///
 /// ```ignore
 /// use ic_cdk::{init, post_upgrade};
@@ -120,10 +116,8 @@ fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> Option<T> {
 /// Sends a notification, or updates the one this recipient's `key` already
 /// names.
 ///
-/// Never traps and never awaits: a notification is an aside to whatever the
-/// app was actually doing, so a failure here must not fail that. Everything
-/// that goes wrong afterwards is absorbed by the library and visible in
-/// [`metrics`].
+/// Never traps and never awaits, so it cannot fail the call it is made from.
+/// What goes wrong afterwards shows up in [`metrics`].
 pub fn send(recipient: Principal, notification: Notification) {
     let now = time();
 
@@ -155,14 +149,12 @@ pub fn send(recipient: Principal, notification: Notification) {
     }
 }
 
-/// This notification no longer needs anyone's attention. Its content goes, so
-/// a pull finds nothing and a channel that sweeps can close it.
+/// This notification no longer needs anyone's attention.
 pub fn dismiss(recipient: Principal, key: &str) {
     with_store(|store| store.dismiss(recipient, key));
 }
 
-/// The delivery pipeline, hour by hour, for whatever the app already uses to
-/// watch itself.
+/// The delivery pipeline, hour by hour.
 pub fn metrics() -> Metrics {
     with_store(|store| Metrics {
         hours: store.hours(),
@@ -176,15 +168,14 @@ pub fn metrics() -> Metrics {
     })
 }
 
-/// Answers Internet Identity's content pull. Call this from the endpoint
-/// [`endpoints!`] generates, or from your own if you would rather name it.
+/// Answers Internet Identity's content pull, for an app that would rather
+/// declare the endpoint itself than use [`endpoints!`].
 pub fn notification_content(id: NotificationId) -> Option<Content> {
     sender_info()?;
     with_store(|store| store.content_of(id)).flatten()
 }
 
-/// Records Internet Identity's receipt. Content stays until it expires: other
-/// devices may still pull the same notification.
+/// Records Internet Identity's receipt.
 pub fn notification_received(id: NotificationId) {
     if sender_info().is_none() {
         return;
@@ -197,12 +188,8 @@ pub fn notification_received(id: NotificationId) {
     });
 }
 
-/// The two endpoints Internet Identity calls.
-///
-/// The content pull is a `query`: the replica serves caller info to queries, so
-/// a channel with a user waiting does not pay for consensus to read a
-/// notification's text. The receipt is an `update`, because it records
-/// something.
+/// The two endpoints Internet Identity calls: a `query` for the content and an
+/// `update` for the receipt.
 #[macro_export]
 macro_rules! endpoints {
     () => {
@@ -331,8 +318,8 @@ async fn send_batch(config: &Config, batch: &[Entry]) -> Outcome {
     }
 }
 
-/// Counter ids start from a random offset, so two canisters sending for one
-/// origin do not both hand out the same low numbers.
+/// A random offset for counter ids, so two canisters sending for one origin
+/// do not both hand out the same low numbers.
 async fn seed_ids() {
     let reply = Call::unbounded_wait(Principal::management_canister(), "raw_rand").await;
 

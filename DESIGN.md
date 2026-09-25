@@ -1027,6 +1027,12 @@ sorts a lane by expiry, so taking a batch is a range scan and the ordering
 survives an upgrade because it was never stored. Parked entries sort by
 `(due_at, id)`, so promoting what is due is a scan from the start of that map.
 
+**A notification is a struct literal, not a builder.** Motoko writes the
+record out with `null` for what it does not set; Rust writes the fields it
+means and `..Default::default()` for the rest. Same shape, each idiomatic where
+it lives — a builder would have made the two libraries read differently for no
+gain.
+
 **The endpoints come from a macro.** `endpoints!()` expands to the two
 `#[ic_cdk::query]` / `#[ic_cdk::update]` functions Internet Identity calls,
 which is as close as Rust gets to a mixin injecting members.

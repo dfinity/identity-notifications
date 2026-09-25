@@ -125,9 +125,13 @@ fn user(n: u64) -> Principal {
 }
 
 fn message(key: &str, urgency: Option<Urgency>) -> Notification {
-    let mut notification = Notification::new("New message", "hello").key(key);
-    notification.urgency = urgency;
-    notification
+    Notification {
+        title: "New message".into(),
+        body: "hello".into(),
+        key: Some(key.into()),
+        urgency,
+        ..Default::default()
+    }
 }
 
 #[test]

@@ -56,11 +56,15 @@ fn send_message(to: candid::Principal, text: String) {
 
     notifications::send(
         to,
-        Notification::new("New message", text)
-            .url("https://chat.example.com/chats")
+        Notification {
+            title: "New message".into(),
+            body: text,
+            url: Some("https://chat.example.com/chats".into()),
             // Names what this is about, so the next message updates this
             // notification instead of stacking another one beside it.
-            .key("chat-alice"),
+            key: Some("chat-alice".into()),
+            ..Default::default()
+        },
     );
 }
 ```
