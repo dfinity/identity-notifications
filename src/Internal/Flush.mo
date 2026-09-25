@@ -60,7 +60,7 @@ module {
 
         for (entry in batch.values()) {
           switch (Map.get(refused, Nat64.compare, entry.id)) {
-            case null {};
+            case null Outbox.settle(outbox, entry);
             case (?#Deferred { retry_after }) {
               Metrics.record(pipeline, now, #deferred, 1);
               Outbox.defer(outbox, entry, Nat64.toNat(retry_after))

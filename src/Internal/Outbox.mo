@@ -38,6 +38,9 @@ module {
     parked : PriorityQueue.PriorityQueue<Entry>;
     content : Map.Map<Nat64, Types.Content>;
     received : Map.Map<Nat64, Bool>;
+    /// Every notification waiting to be accepted, by id, so a repeat of a key
+    /// updates what is already queued instead of queueing a second attempt.
+    entries : Map.Map<Nat64, Entry>;
     var counter : Nat64;
     var bytes : Nat
   };
@@ -47,6 +50,7 @@ module {
     parked = PriorityQueue.empty<Entry>();
     content = Map.empty<Nat64, Types.Content>();
     received = Map.empty<Nat64, Bool>();
+    entries = Map.empty<Nat64, Entry>();
     var counter = 0;
     var bytes = 0
   };
@@ -105,20 +109,31 @@ module {
       case null defaultExpiry
     };
 
-    LaneQueue.push<Entry>(
-      self.ready,
-      lane(notification.urgency),
-      {
-        id;
-        recipient;
-        lane = lane(notification.urgency);
-        expiresAt;
-        var dueAt = now;
-        var parked = false
-      },
-      soonestExpiry
-    );
+    // Already waiting — queued, parked or deferred. Its content has just been
+    // replaced, so the entry itself stands: queueing a second one would
+    // attempt the same notification twice.
+    switch (Map.get(self.entries, Nat64.compare, id)) {
+      case (?_) return ?id;
+      case null {}
+    };
+
+    let entry : Entry = {
+      id;
+      recipient;
+      lane = lane(notification.urgency);
+      expiresAt;
+      var dueAt = now;
+      var parked = false
+    };
+    Map.add(self.entries, Nat64.compare, id, entry);
+    LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry);
     ?id
+  };
+
+  /// Internet Identity took it. Nothing more to send, so the entry goes; its
+  /// content stays until a channel has had its chance to pull it.
+  public func settle(self : State, entry : Entry) {
+    Map.remove(self.entries, Nat64.compare, entry.id)
   };
 
   /// Moves parked entries back into their lanes once their second attempt is
@@ -143,6 +158,7 @@ module {
   /// on. A second refusal drops it.
   public func park(self : State, entry : Entry) : Bool {
     if (entry.parked) {
+      Map.remove(self.entries, Nat64.compare, entry.id);
       release(self, entry.id);
       return false
     };
