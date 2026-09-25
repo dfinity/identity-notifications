@@ -16,7 +16,8 @@ identity-notifications = "0.1"
 ```
 
 ```rust
-use ic_stable_structures::memory_manager::{MemoryManager, MemoryId};
+use ic_cdk::{init, post_upgrade, update};
+use ic_stable_structures::memory_manager::MemoryManager;
 use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications as notifications;
 use identity_notifications::Notification;
@@ -33,13 +34,13 @@ thread_local! {
 // your own state out of them.
 const NOTIFICATIONS_BASE: u8 = 10;
 
-#[ic_cdk::init]
-#[ic_cdk::post_upgrade]
+#[init]
+#[post_upgrade]
 fn init() {
     MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
 }
 
-#[ic_cdk::update]
+#[update]
 fn send_message(to: candid::Principal, text: String) {
     // ... store the message ...
 

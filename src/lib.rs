@@ -4,12 +4,13 @@
 //! content Internet Identity pulls back, and the delivery metrics.
 //!
 //! ```ignore
+//! use ic_cdk::update;
 //! use identity_notifications as notifications;
 //! use notifications::Notification;
 //!
 //! notifications::endpoints!();
 //!
-//! #[ic_cdk::update]
+//! #[update]
 //! fn send_message(to: candid::Principal, text: String) {
 //!     // ... store the message ...
 //!     notifications::send(
@@ -29,6 +30,9 @@ pub mod internal;
 pub mod types;
 
 use candid::Principal;
+use ic_cdk::api::{msg_caller_info_data, msg_caller_info_signer, time};
+use ic_cdk::call::Call;
+use ic_cdk_timers::set_timer;
 use ic_stable_structures::memory_manager::MemoryManager;
 use ic_stable_structures::DefaultMemoryImpl;
 use internal::config::{self, Config};
@@ -71,12 +75,15 @@ thread_local! {
 /// upgrade and nothing is restored: the maps are already where they were.
 ///
 /// ```ignore
+/// use ic_cdk::{init, post_upgrade};
+///
 /// thread_local! {
 ///     static MEMORIES: RefCell<MemoryManager<DefaultMemoryImpl>> =
 ///         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 /// }
 ///
-/// #[ic_cdk::init]
+/// #[init]
+/// #[post_upgrade]
 /// fn init() {
 ///     MEMORIES.with_borrow(|manager| notifications::init(manager, 10));
 /// }
@@ -106,7 +113,7 @@ fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> Option<T> {
 /// that goes wrong afterwards is absorbed by the library and visible in
 /// [`metrics`].
 pub fn send(recipient: Principal, notification: Notification) {
-    let now = ic_cdk::api::time();
+    let now = time();
 
     let config = match configured() {
         Ok(config) => config,
@@ -170,7 +177,7 @@ pub fn notification_received(id: NotificationId) {
     if sender_info().is_none() {
         return;
     }
-    let now = ic_cdk::api::time();
+    let now = time();
     with_store(|store| {
         if store.mark_received(id) {
             store.record(now, Event::Received, 1);
@@ -217,11 +224,11 @@ fn note(why: Misconfigured, now: u64) {
 /// origin. Anything else is not ours to answer.
 fn sender_info() -> Option<SenderInfo> {
     let config = configured().ok()?;
-    if ic_cdk::api::msg_caller_info_signer()? != config.internet_identity {
+    if msg_caller_info_signer()? != config.internet_identity {
         return None;
     }
 
-    let info = internal::caller_info::decode(&ic_cdk::api::msg_caller_info_data())?;
+    let info = internal::caller_info::decode(&msg_caller_info_data())?;
     (info.origin == config.origin).then_some(info)
 }
 
@@ -235,7 +242,7 @@ fn arm() {
     });
 
     if arm {
-        ic_cdk_timers::set_timer(COALESCE, flush_once());
+        set_timer(COALESCE, flush_once());
     }
 }
 
@@ -245,7 +252,7 @@ async fn flush_once() {
     let config = match configured() {
         Ok(config) => config,
         Err(why) => {
-            note(why, ic_cdk::api::time());
+            note(why, time());
             return;
         }
     };
@@ -254,7 +261,7 @@ async fn flush_once() {
         seed_ids().await;
     }
 
-    let now = ic_cdk::api::time();
+    let now = time();
     let batch = with_store(|store| {
         store.promote(now);
         let batch = store.take(store.batch_limit());
@@ -292,10 +299,9 @@ async fn flush_once() {
 async fn send_batch(config: &Config, batch: &[Entry]) -> Outcome {
     let arg = flush::arg(&config.origin, batch);
 
-    let response =
-        ic_cdk::call::Call::unbounded_wait(config.internet_identity, "app_send_notification")
-            .with_arg(&arg)
-            .await;
+    let response = Call::unbounded_wait(config.internet_identity, "app_send_notification")
+        .with_arg(&arg)
+        .await;
 
     match response.map(|reply| reply.candid::<ii::SendNotificationResult>()) {
         Ok(Ok(ii::SendNotificationResult::Ok(response))) => {
@@ -316,8 +322,7 @@ async fn send_batch(config: &Config, batch: &[Entry]) -> Outcome {
 /// Counter ids start from a random offset, so two canisters sending for one
 /// origin do not both hand out the same low numbers.
 async fn seed_ids() {
-    let reply =
-        ic_cdk::call::Call::unbounded_wait(Principal::management_canister(), "raw_rand").await;
+    let reply = Call::unbounded_wait(Principal::management_canister(), "raw_rand").await;
 
     if let Ok(Ok(bytes)) = reply.map(|reply| reply.candid::<Vec<u8>>()) {
         with_store(|store| store.seed(&bytes));

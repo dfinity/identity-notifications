@@ -2,6 +2,7 @@
 //! one-to-one conversations and groups, and three calls into the library.
 
 use candid::{CandidType, Principal};
+use ic_cdk::api::{msg_caller, time};
 use ic_cdk::{init, post_upgrade, query, update};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::Bound;
@@ -70,7 +71,7 @@ fn direct_id(a: Principal, b: Principal) -> String {
 #[update]
 fn create_group(name: String, members: Vec<Principal>) -> String {
     let id = format!("group:{name}");
-    let caller = ic_cdk::api::msg_caller();
+    let caller = msg_caller();
     let mut members = members;
     if !members.contains(&caller) {
         members.push(caller);
@@ -90,7 +91,7 @@ fn create_group(name: String, members: Vec<Principal>) -> String {
 
 #[update]
 fn send_direct(to: Principal, text: String) {
-    let caller = ic_cdk::api::msg_caller();
+    let caller = msg_caller();
     let id = direct_id(caller, to);
 
     CHATS.with_borrow_mut(|chats| {
@@ -110,7 +111,7 @@ fn send_direct(to: Principal, text: String) {
 
 #[update]
 fn send_to_group(id: String, text: String) {
-    post(&id, ic_cdk::api::msg_caller(), text);
+    post(&id, msg_caller(), text);
 }
 
 /// Everyone in the conversation except the sender hears about it, and the
@@ -124,7 +125,7 @@ fn post(id: &str, from: Principal, text: String) {
         conversation.messages.push(Message {
             from,
             text: text.clone(),
-            at: ic_cdk::api::time(),
+            at: time(),
         });
         let members = conversation.members.clone();
         chats.insert(id.to_string(), conversation);
@@ -146,7 +147,7 @@ fn post(id: &str, from: Principal, text: String) {
 /// the conversation is unread.
 #[update]
 fn mark_read(id: String, up_to: u64) {
-    let caller = ic_cdk::api::msg_caller();
+    let caller = msg_caller();
 
     let newest = CHATS.with_borrow(|chats| {
         chats
