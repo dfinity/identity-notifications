@@ -242,4 +242,87 @@ do {
     case (?content) assert content.title == "New message";
     case null assert false
   }
+};
+
+// At the ceiling the campaign's entries go and the urgent one still gets in,
+// and anything already accepted keeps its content.
+do {
+  let w = world(1);
+  reachable(w, user(0));
+
+  // One accepted notification, whose content must survive whatever follows.
+  send(w, user(0), message("kept", null, null), HOUR);
+  ignore flush(w, HOUR);
+
+  // Now fill a tiny budget with campaign entries, then send something urgent.
+  let tiny = 900;
+  var i = 0;
+  while (i < 20) {
+    ignore Outbox.add(
+      w.outbox,
+      user(0),
+      message("camp-" # Nat.toText(i), ?#veryLow, null),
+      HOUR + 24 * HOUR,
+      tiny,
+      HOUR
+    );
+    i += 1
+  };
+  let urgent = Outbox.add(
+    w.outbox,
+    user(0),
+    message("urgent", ?#high, null),
+    HOUR + 24 * HOUR,
+    tiny,
+    HOUR
+  );
+
+  switch urgent {
+    case (?id) switch (Outbox.contentOf(w.outbox, id)) {
+      case (?_) {};
+      case null assert false
+    };
+    case null assert false
+  };
+  switch (Outbox.contentOf(w.outbox, Ids.keyed(user(0), "kept"))) {
+    case (?_) {};
+    case null assert false
+  }
+};
+
+// A batch Internet Identity says is too large is not lost: nothing was
+// enqueued, so the entries go back and the limit is remembered.
+do {
+  let w = world(10_000);
+  for (i in Nat.range(0, 10)) reachable(w, user(i));
+  for (i in Nat.range(0, 10)) {
+    send(w, user(i), message("m-" # Nat.toText(i), null, null), HOUR)
+  };
+
+  Outbox.promote(w.outbox, HOUR);
+  let batch = Outbox.take(w.outbox, 10);
+  Flush.apply(w.outbox, w.pipeline, batch, #tooMany(4), HOUR);
+
+  assert Outbox.backlog(w.outbox) == 10;
+
+  w.batchLimit := 4;
+  let first = flush(w, HOUR);
+  assert first.sent == 4 and first.accepted == 4;
+  assert Outbox.backlog(w.outbox) == 6
+};
+
+// A call that never lands leaves the notification for its second attempt
+// rather than dropping it.
+do {
+  let w = world(10);
+  reachable(w, user(0));
+  send(w, user(0), message("m", null, ?(3 * HOUR)), HOUR);
+
+  Outbox.promote(w.outbox, HOUR);
+  let batch = Outbox.take(w.outbox, 10);
+  Flush.apply(w.outbox, w.pipeline, batch, #unreachable, HOUR);
+
+  assert Outbox.backlog(w.outbox) == 1;
+  assert flush(w, HOUR + 60).sent == 0;
+  assert flush(w, 3 * HOUR).accepted == 1
 }

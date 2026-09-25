@@ -214,9 +214,13 @@ module {
   public func backlog(self : State) : Nat = LaneQueue.size(self.ready) + PriorityQueue.size(self.parked);
 
   /// Nothing accepted is ever shed: Internet Identity may still deliver it and
-  /// a pull has to find content. What goes is the outbox, lowest lane first
-  /// and newest first within it, which is the tail of a campaign rather than
-  /// the notification behind it.
+  /// a pull has to find content. What goes is the outbox, and the lowest lane
+  /// first — a campaign's entries before the notification behind them.
+  ///
+  /// Within a lane the choice is whatever the lane's order yields. A heap can
+  /// only be popped in the order it was built, and rummaging for the newest
+  /// entry would cost more than the byte it frees; in the case this exists for,
+  /// a campaign, every entry shares an expiry anyway.
   func shed(self : State, capacityBytes : Nat, needed : Nat) : Bool {
     var lane = LANES;
     while (lane > 0) {
@@ -225,8 +229,9 @@ module {
         if (self.bytes + needed <= capacityBytes) return true;
         if (LaneQueue.laneSize(self.ready, lane) == 0) break shedding;
 
-        let victims = LaneQueue.take<Entry>(self.ready, laneOnly(lane), 1, furthestExpiry);
+        let victims = LaneQueue.take<Entry>(self.ready, laneOnly(lane), 1, soonestExpiry);
         if (victims.size() == 0) break shedding;
+        Map.remove(self.entries, Nat64.compare, victims[0].id);
         release(self, victims[0].id)
       }
     };
