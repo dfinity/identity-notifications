@@ -1,0 +1,15 @@
+[package]
+name = "identity-notifications"
+version = "0.1.0"
+description = "Notify Internet Identity users from a Motoko canister: one send call, the library handles the rest."
+keywords = [ "internet-identity", "notifications", "web-push", "identity", "icp" ]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/dfinity/motoko-identity-notifications"
+
+[dependencies]
+core = "2.5.0"
+sha2 = "0.2.5"
+
+[toolchain]
+moc = "1.16.1"
