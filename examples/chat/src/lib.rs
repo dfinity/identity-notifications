@@ -8,23 +8,16 @@ use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemor
 use ic_stable_structures::storable::Bound;
 use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, Storable};
 use identity_notifications as notifications;
-use identity_notifications::{Metrics, Notification};
+use identity_notifications::{Memories, Metrics, Notification};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// This app's conversations live in one memory; the library names its own,
-/// and how many it takes is right here rather than implied.
+/// This app's conversations. The library's memories are named where it is
+/// handed them, below.
 const CHATS_MEMORY: MemoryId = MemoryId::new(0);
-const NOTIFICATION_MEMORIES: [MemoryId; notifications::MEMORIES] = [
-    MemoryId::new(1),
-    MemoryId::new(2),
-    MemoryId::new(3),
-    MemoryId::new(4),
-    MemoryId::new(5),
-];
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -193,7 +186,7 @@ fn title(id: &str, from: Principal) -> String {
 
 #[init]
 fn init() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
+    open_notifications();
 }
 
 /// Nothing to save and nothing to restore: both this app's conversations and
@@ -201,7 +194,24 @@ fn init() {
 /// the handle back.
 #[post_upgrade]
 fn post_upgrade() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
+    open_notifications();
+}
+
+/// Which memory each part of the library gets. Ids 1 to 5 are its; this app
+/// keeps out of them.
+fn open_notifications() {
+    MEMORIES.with_borrow(|manager| {
+        notifications::init(
+            manager,
+            Memories {
+                outbox: MemoryId::new(1),
+                parked: MemoryId::new(2),
+                content: MemoryId::new(3),
+                metrics: MemoryId::new(4),
+                counters: MemoryId::new(5),
+            },
+        )
+    });
 }
 
 ic_cdk::export_candid!();

@@ -33,11 +33,12 @@ use candid::Principal;
 use ic_cdk::api::{msg_caller_info_data, msg_caller_info_signer, time};
 use ic_cdk::call::Call;
 use ic_cdk_timers::set_timer;
-use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+use ic_stable_structures::memory_manager::MemoryManager;
 use ic_stable_structures::DefaultMemoryImpl;
 use internal::config::{self, Config};
 use internal::flush::{self, Outcome};
 use internal::ii;
+pub use internal::store::Memories;
 use internal::store::{Entry, Event, Store};
 use std::cell::RefCell;
 use std::time::Duration;
@@ -67,18 +68,18 @@ thread_local! {
     static FLUSHING: RefCell<bool> = const { RefCell::new(false) };
 }
 
-/// Hands the library the stable memories it keeps everything in. It takes
-/// exactly [`MEMORIES`] of them and the app names each one, so what it costs
-/// is visible here rather than hidden behind a base id — and if a later
-/// version needs another memory, this stops compiling instead of quietly
-/// taking one of yours.
+/// Hands the library the stable memories it keeps everything in. Every one is
+/// named, so what the library is taking is written at the call site rather
+/// than hidden behind a count — and a version that needs another memory adds a
+/// field, which stops this compiling instead of quietly taking an id you were
+/// already using.
 ///
 /// Call it from `#[init]` **and** `#[post_upgrade]`. Nothing is serialised on
 /// upgrade and nothing is restored: the maps are already where they were.
 ///
 /// ```ignore
 /// use ic_cdk::{init, post_upgrade};
-/// use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+/// use ic_stable_structures::memory_manager::MemoryManager;
 ///
 /// thread_local! {
 ///     static MEMORIES: RefCell<MemoryManager<DefaultMemoryImpl>> =
@@ -89,11 +90,20 @@ thread_local! {
 /// #[post_upgrade]
 /// fn init() {
 ///     MEMORIES.with_borrow(|manager| {
-///         notifications::init(manager, [10, 11, 12, 13, 14].map(MemoryId::new))
+///         notifications::init(
+///             manager,
+///             Memories {
+///                 outbox: MemoryId::new(10),
+///                 parked: MemoryId::new(11),
+///                 content: MemoryId::new(12),
+///                 metrics: MemoryId::new(13),
+///                 counters: MemoryId::new(14),
+///             },
+///         )
 ///     });
 /// }
 /// ```
-pub fn init(manager: &MemoryManager<DefaultMemoryImpl>, memories: [MemoryId; MEMORIES]) {
+pub fn init(manager: &MemoryManager<DefaultMemoryImpl>, memories: Memories) {
     let mut store = Store::new(manager, memories);
     if store.batch_limit() <= 1 {
         store.set_batch_limit(BATCH_GUESS);
@@ -102,9 +112,6 @@ pub fn init(manager: &MemoryManager<DefaultMemoryImpl>, memories: [MemoryId; MEM
     STORE.set(Some(store));
     arm();
 }
-
-/// How many stable memories [`init`] takes.
-pub const MEMORIES: usize = internal::store::MEMORIES;
 
 fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> Option<T> {
     STORE.with_borrow_mut(|store| store.as_mut().map(f))

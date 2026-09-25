@@ -20,7 +20,7 @@ use ic_cdk::{init, post_upgrade, update};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications as notifications;
-use identity_notifications::Notification;
+use identity_notifications::{Memories, Notification};
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -30,15 +30,25 @@ thread_local! {
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 }
 
-// The library's memories, named one by one: what it costs you is visible, and
-// a version that needs another one will not compile against this.
-const NOTIFICATION_MEMORIES: [MemoryId; notifications::MEMORIES] =
-    [MemoryId::new(10), MemoryId::new(11), MemoryId::new(12), MemoryId::new(13), MemoryId::new(14)];
-
 #[init]
 #[post_upgrade]
 fn init() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
+    // Which memory each part of the library gets. Named rather than counted,
+    // so what you are handing over is right here — and a version that needs
+    // another memory adds a field, which stops this compiling instead of
+    // quietly taking an id you were already using.
+    MEMORIES.with_borrow(|manager| {
+        notifications::init(
+            manager,
+            Memories {
+                outbox: MemoryId::new(10),
+                parked: MemoryId::new(11),
+                content: MemoryId::new(12),
+                metrics: MemoryId::new(13),
+                counters: MemoryId::new(14),
+            },
+        )
+    });
 }
 
 #[update]

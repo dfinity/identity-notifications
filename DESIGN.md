@@ -1000,10 +1000,18 @@ instruction budget. So the library keeps everything in `ic-stable-structures`
 maps over memories the app hands it, and `init` is called again after an
 upgrade rather than anything being restored.
 
-The app names each memory rather than passing a base id. Five is not a number
-worth hiding, and an app that handed over a base could not see what it was
-giving up — or notice when a later version silently took a sixth id that was
-already holding something of its own. Naming them makes that a compile error.
+The app names each memory in a struct — `outbox`, `parked`, `content`,
+`metrics`, `counters` — rather than passing a base id or a count. A base hid
+what the library was taking, and a count answered "how many" without answering
+"which". Named fields answer both at the call site, and a version that needs
+another memory adds a field, which stops an app compiling rather than quietly
+taking an id it was already using.
+
+A closure the library calls for each memory it wants would be shorter, and was
+rejected: the closure would have to return the same memories in the same order
+on every install and upgrade, so an app that later reordered its allocation
+would swap two of the library's maps for each other. Nothing would complain.
+Named fields have no order to get wrong.
 
 That also replaces the lane heaps with ordered keys: `(lane, expires_at, id)`
 sorts a lane by expiry, so taking a batch is a range scan and the ordering

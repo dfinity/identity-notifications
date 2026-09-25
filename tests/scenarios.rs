@@ -8,17 +8,17 @@ use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications::internal::flush::{self, Outcome};
 use identity_notifications::internal::ii;
 use identity_notifications::internal::store::{Event, Store};
-use identity_notifications::{Notification, Urgency};
+use identity_notifications::{Memories, Notification, Urgency};
 use std::collections::HashMap;
 
 const HOUR: u64 = 3_600_000_000_000;
-const MEMORY_IDS: [MemoryId; identity_notifications::MEMORIES] = [
-    MemoryId::new(0),
-    MemoryId::new(1),
-    MemoryId::new(2),
-    MemoryId::new(3),
-    MemoryId::new(4),
-];
+const MEMORY_IDS: Memories = Memories {
+    outbox: MemoryId::new(0),
+    parked: MemoryId::new(1),
+    content: MemoryId::new(2),
+    metrics: MemoryId::new(3),
+    counters: MemoryId::new(4),
+};
 const CAPACITY: u64 = 1_073_741_824;
 
 /// Whether Internet Identity knows a recipient, and whether they have a

@@ -22,10 +22,23 @@ use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// How many stable memories the library keeps its state in. The app names
-/// every one of them, so this number is visible at the call site and a change
-/// to it is a compile error rather than a collision with the app's own ids.
-pub const MEMORIES: usize = 5;
+/// The stable memories the library keeps its state in. The app says which id
+/// each one gets, so what it is giving up is written at the call site — and a
+/// version that needs another memory adds a field here, which stops the app
+/// compiling instead of quietly taking an id it was already using.
+#[derive(Clone, Copy, Debug)]
+pub struct Memories {
+    /// Notifications waiting to be sent.
+    pub outbox: MemoryId,
+    /// Notifications waiting for the second attempt a refusal earned them.
+    pub parked: MemoryId,
+    /// What a channel may still pull.
+    pub content: MemoryId,
+    /// An hour of the delivery pipeline per entry, thirty days deep.
+    pub metrics: MemoryId,
+    /// Counters: the id seed, the learned batch limit, bytes held.
+    pub counters: MemoryId,
+}
 
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
 const LANES: u8 = 4;
@@ -161,16 +174,13 @@ pub enum Event {
 }
 
 impl Store {
-    /// Opens the store over the memories the app named. In order: the outbox,
-    /// the entries parked for a second attempt, the content a channel may
-    /// pull, the hourly metrics, and the counters.
-    pub fn new(manager: &MemoryManager<DefaultMemoryImpl>, memories: [MemoryId; MEMORIES]) -> Self {
+    pub fn new(manager: &MemoryManager<DefaultMemoryImpl>, memories: Memories) -> Self {
         Self {
-            ready: BTreeMap::init(manager.get(memories[0])),
-            parked: BTreeMap::init(manager.get(memories[1])),
-            content: BTreeMap::init(manager.get(memories[2])),
-            hours: BTreeMap::init(manager.get(memories[3])),
-            meta: Cell::init(manager.get(memories[4]), Meta::default()),
+            ready: BTreeMap::init(manager.get(memories.outbox)),
+            parked: BTreeMap::init(manager.get(memories.parked)),
+            content: BTreeMap::init(manager.get(memories.content)),
+            hours: BTreeMap::init(manager.get(memories.metrics)),
+            meta: Cell::init(manager.get(memories.counters), Meta::default()),
         }
     }
 
@@ -501,13 +511,13 @@ mod tests {
 
     const HOUR: u64 = 3_600_000_000_000;
     const ROOMY: u64 = 1_000_000;
-    const MEMORY_IDS: [MemoryId; MEMORIES] = [
-        MemoryId::new(0),
-        MemoryId::new(1),
-        MemoryId::new(2),
-        MemoryId::new(3),
-        MemoryId::new(4),
-    ];
+    const MEMORY_IDS: Memories = Memories {
+        outbox: MemoryId::new(0),
+        parked: MemoryId::new(1),
+        content: MemoryId::new(2),
+        metrics: MemoryId::new(3),
+        counters: MemoryId::new(4),
+    };
 
     /// Off-canister, `DefaultMemoryImpl` is a plain vector, so the whole store
     /// runs in a test without a replica.
