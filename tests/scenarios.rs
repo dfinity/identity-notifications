@@ -12,6 +12,9 @@ use identity_notifications::{Memories, Notification, Urgency};
 use std::collections::HashMap;
 
 const HOUR: u64 = 3_600_000_000_000;
+const MINUTE: u64 = 60_000_000_000;
+/// Internet Identity's default, as the library mirrors it.
+const RETENTION: u64 = 5 * MINUTE;
 const MEMORY_IDS: Memories = Memories {
     entries: MemoryId::new(0),
     content: MemoryId::new(1),
@@ -62,15 +65,16 @@ impl World {
 
     fn send(&mut self, to: Principal, notification: Notification, now: u64) {
         self.store
-            .add(to, notification, now + 24 * HOUR, CAPACITY, now);
+            .add(to, notification, now + RETENTION, CAPACITY, now);
     }
 
     /// One flush: what Internet Identity would answer, applied the way the
     /// canister layer applies it.
     fn flush(&mut self, now: u64) -> Flushed {
+        self.store.sweep(now);
         self.store.promote(now);
         let batch = self.store.take(self.batch_limit);
-        let (batch, _) = self.store.drop_expired(batch, now);
+        let (batch, _) = self.store.sendable(batch, now);
         if batch.is_empty() {
             return Flushed {
                 sent: 0,
@@ -102,7 +106,7 @@ impl World {
                 id: entry.id,
                 recipient: entry.recipient,
                 reason: ii::NotAcceptedReason::Deferred {
-                    retry_after: now + HOUR,
+                    retry_after: now + MINUTE,
                 },
             });
         }
@@ -218,7 +222,7 @@ fn deferral_is_not_refusal() {
     assert_eq!(world.flush(HOUR + 60).sent, 0, "not due yet");
 
     world.room_per_flush = 10;
-    let second = world.flush(2 * HOUR);
+    let second = world.flush(HOUR + MINUTE);
     assert_eq!((second.sent, second.accepted), (3, 3));
     assert_eq!(world.store.backlog(), 0);
 }
@@ -242,7 +246,7 @@ fn a_second_refusal_drops_the_notification_and_its_content() {
 }
 
 #[test]
-fn accepted_content_is_kept_until_it_expires() {
+fn accepted_content_is_kept_until_it_expires_and_no_longer() {
     let mut world = World::new(10);
     world.reachable(user(0));
     world.send(user(0), message("kept", None), HOUR);
@@ -251,8 +255,42 @@ fn accepted_content_is_kept_until_it_expires() {
     let id = identity_notifications::internal::ids::keyed(user(0), "kept");
     assert_eq!(
         world.store.content_of(id).map(|content| content.title),
-        Some("New message".to_string())
+        Some("New message".to_string()),
+        "a channel may still pull it"
     );
+
+    world.flush(HOUR + RETENTION);
+    assert!(
+        world.store.content_of(id).is_none(),
+        "past its expiry nothing will pull it"
+    );
+}
+
+#[test]
+fn a_campaign_nobody_opens_does_not_accumulate() {
+    let mut world = World::new(10_000);
+    for i in 0..500 {
+        world.reachable(user(i));
+    }
+
+    for round in 0..4u64 {
+        let at = HOUR + round * 2 * RETENTION;
+        for i in 0..500 {
+            world.send(
+                user(i),
+                message(&format!("campaign-{round}-{i}"), Some(Urgency::VeryLow)),
+                at,
+            );
+        }
+        assert_eq!(world.flush(at).accepted, 500);
+    }
+
+    // Every round's content is an expiry behind the next one, so what the
+    // canister holds is one round's worth rather than four.
+    let stale = identity_notifications::internal::ids::keyed(user(0), "campaign-0-0");
+    let current = identity_notifications::internal::ids::keyed(user(0), "campaign-3-0");
+    assert!(world.store.content_of(stale).is_none());
+    assert!(world.store.content_of(current).is_some());
 }
 
 #[test]
@@ -302,7 +340,7 @@ fn an_upgrade_serialises_nothing_and_loses_nothing() {
         store.add(
             user(0),
             message("pending", None),
-            HOUR + 24 * HOUR,
+            HOUR + RETENTION,
             CAPACITY,
             HOUR,
         );

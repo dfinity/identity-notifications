@@ -1,7 +1,7 @@
 //! Everything the library holds, in stable memory.
 
 use super::ids;
-use super::keys::EntryKey;
+use super::keys::{self, EntryKey};
 use crate::types::{
     Bucket, Content, Misconfigured, MisconfiguredSince, Notification, NotificationId,
 };
@@ -14,12 +14,12 @@ use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// The stable memories the library keeps its state in. Three, because content
-/// runs to 8KB where an entry is 64 bytes and a `StableBTreeMap` sizes its
-/// nodes from the value bound; everything else shares a map.
+/// The stable memories the library keeps its state in. Content has its own
+/// because it runs to 8KB where a row is 66 bytes, and a `StableBTreeMap`
+/// sizes its nodes from the value bound.
 #[derive(Clone, Copy, Debug)]
 pub struct Memories {
-    /// Notifications waiting to be sent, or waiting for a second attempt.
+    /// Notifications waiting to be sent, and where each one stands.
     pub entries: MemoryId,
     /// What a channel may still pull.
     pub content: MemoryId,
@@ -29,9 +29,6 @@ pub struct Memories {
 
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
 const LANES: u8 = 4;
-
-/// How far before its expiry a refused notification is tried again.
-const RETRY_LEAD: u64 = 300_000_000_000;
 
 const HOUR: u64 = 3_600_000_000_000;
 const KEEP_HOURS: usize = 720;
@@ -43,35 +40,76 @@ pub struct Entry {
     pub lane: u8,
     pub expires_at: u64,
     pub due_at: u64,
-    pub parked: bool,
+    /// Its one second attempt has been spent.
+    pub retried: bool,
 }
 
-impl Entry {
-    fn waiting_key(&self) -> EntryKey {
-        EntryKey::waiting(self.lane, self.expires_at, self.id)
+/// When the second attempt a refusal earns is made: late enough to leave the
+/// user most of the window to sign in or turn notifications on, early enough
+/// that a five-minute notification still gets the attempt.
+fn retry_at(now: u64, expires_at: u64) -> u64 {
+    now + expires_at.saturating_sub(now) * 2 / 3
+}
+
+/// Where a notification stands, as one small row per notification, so a repeat
+/// of a key finds it without walking the map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Slot {
+    kind: u8,
+    lane: u8,
+    expires_at: u64,
+    due_at: u64,
+}
+
+impl Slot {
+    fn key(&self, id: NotificationId) -> EntryKey {
+        match self.kind {
+            keys::WAITING => EntryKey::waiting(self.lane, self.expires_at, id),
+            keys::PARKED => EntryKey::parked(self.due_at, id),
+            _ => EntryKey::accepted(self.expires_at, id),
+        }
     }
 
-    fn parked_key(&self) -> EntryKey {
-        EntryKey::parked(self.due_at, self.id)
+    fn queued(&self) -> bool {
+        self.kind == keys::WAITING || self.kind == keys::PARKED
     }
 }
 
-impl Storable for Entry {
+/// A row of the entry map: a notification, or where one stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row {
+    Entry(Entry),
+    Slot(Slot),
+}
+
+impl Storable for Row {
     const BOUND: Bound = Bound::Bounded {
-        max_size: 64,
+        max_size: 66,
         is_fixed_size: false,
     };
 
     fn to_bytes(&self) -> Cow<'_, [u8]> {
-        let who = self.recipient.as_slice();
-        let mut bytes = Vec::with_capacity(27 + who.len());
-        bytes.extend_from_slice(&self.id.to_be_bytes());
-        bytes.extend_from_slice(&self.expires_at.to_be_bytes());
-        bytes.extend_from_slice(&self.due_at.to_be_bytes());
-        bytes.push(self.lane);
-        bytes.push(u8::from(self.parked));
-        bytes.push(who.len() as u8);
-        bytes.extend_from_slice(who);
+        let mut bytes = Vec::with_capacity(66);
+        match self {
+            Row::Entry(entry) => {
+                let who = entry.recipient.as_slice();
+                bytes.push(0);
+                bytes.extend_from_slice(&entry.id.to_be_bytes());
+                bytes.extend_from_slice(&entry.expires_at.to_be_bytes());
+                bytes.extend_from_slice(&entry.due_at.to_be_bytes());
+                bytes.push(entry.lane);
+                bytes.push(u8::from(entry.retried));
+                bytes.push(who.len() as u8);
+                bytes.extend_from_slice(who);
+            }
+            Row::Slot(slot) => {
+                bytes.push(1);
+                bytes.push(slot.kind);
+                bytes.push(slot.lane);
+                bytes.extend_from_slice(&slot.expires_at.to_be_bytes());
+                bytes.extend_from_slice(&slot.due_at.to_be_bytes());
+            }
+        }
         Cow::Owned(bytes)
     }
 
@@ -80,14 +118,26 @@ impl Storable for Entry {
     }
 
     fn from_bytes(bytes: Cow<[u8]>) -> Self {
-        let length = usize::from(bytes[26]);
-        Self {
-            id: u64::from_be_bytes(bytes[..8].try_into().expect("bounded")),
-            expires_at: u64::from_be_bytes(bytes[8..16].try_into().expect("bounded")),
-            due_at: u64::from_be_bytes(bytes[16..24].try_into().expect("bounded")),
-            lane: bytes[24],
-            parked: bytes[25] == 1,
-            recipient: Principal::from_slice(&bytes[27..27 + length]),
+        let word =
+            |from: usize| u64::from_be_bytes(bytes[from..from + 8].try_into().expect("bounded"));
+        match bytes[0] {
+            0 => {
+                let length = usize::from(bytes[27]);
+                Row::Entry(Entry {
+                    id: word(1),
+                    expires_at: word(9),
+                    due_at: word(17),
+                    lane: bytes[25],
+                    retried: bytes[26] == 1,
+                    recipient: Principal::from_slice(&bytes[28..28 + length]),
+                })
+            }
+            _ => Row::Slot(Slot {
+                kind: bytes[1],
+                lane: bytes[2],
+                expires_at: word(3),
+                due_at: word(11),
+            }),
         }
     }
 }
@@ -124,11 +174,11 @@ candid_storable!(StoredContent, 8_192);
 /// A row of the metrics map: an hour of the pipeline, or the library's
 /// counters under `COUNTERS_ROW`. Hour zero is the epoch, so never a bucket.
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Row {
+pub enum MetricsRow {
     Hour(Bucket),
     Counters(Meta),
 }
-candid_storable!(Row, 256);
+candid_storable!(MetricsRow, 256);
 
 const COUNTERS_ROW: u64 = 0;
 
@@ -138,14 +188,15 @@ pub struct Meta {
     pub id_seed: u64,
     pub bytes: u64,
     pub batch_limit: u64,
+    pub queued: u64,
     pub misconfigured: Option<MisconfiguredSince>,
 }
 candid_storable!(Meta, 256);
 
 pub struct Store {
-    entries: BTreeMap<EntryKey, Entry, Memory>,
+    entries: BTreeMap<EntryKey, Row, Memory>,
     content: BTreeMap<NotificationId, StoredContent, Memory>,
-    rows: BTreeMap<u64, Row, Memory>,
+    rows: BTreeMap<u64, MetricsRow, Memory>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -168,13 +219,13 @@ impl Store {
 
     fn meta(&self) -> Meta {
         match self.rows.get(&COUNTERS_ROW) {
-            Some(Row::Counters(meta)) => meta,
+            Some(MetricsRow::Counters(meta)) => meta,
             _ => Meta::default(),
         }
     }
 
     fn set_meta(&mut self, meta: Meta) {
-        self.rows.insert(COUNTERS_ROW, Row::Counters(meta));
+        self.rows.insert(COUNTERS_ROW, MetricsRow::Counters(meta));
     }
 
     /// Adds a notification, or replaces the one its key already names.
@@ -187,6 +238,8 @@ impl Store {
         capacity_bytes: u64,
         now: u64,
     ) -> Option<NotificationId> {
+        self.sweep(now);
+
         let mut meta = self.meta();
 
         let id = match notification.key.as_deref() {
@@ -204,25 +257,34 @@ impl Store {
         };
         let size = size_of_content(&content);
 
+        // Replacing a notification frees what the old one held, so an app that
+        // updates one key forever occupies one notification's worth of room.
         if let Some(StoredContent(old)) = self.content.get(&id) {
             meta.bytes = meta.bytes.saturating_sub(size_of_content(&old));
         }
+        self.set_meta(meta);
 
-        if meta.bytes + size > capacity_bytes {
-            meta.bytes = self.shed(meta.bytes, capacity_bytes, size);
-            if meta.bytes + size > capacity_bytes {
-                self.set_meta(meta);
+        if self.meta().bytes + size > capacity_bytes {
+            self.shed(capacity_bytes, size);
+            if self.meta().bytes + size > capacity_bytes {
                 return None;
             }
         }
 
         self.content.insert(id, StoredContent(content));
+        let mut meta = self.meta();
         meta.bytes += size;
         self.set_meta(meta);
 
-        // Already waiting: its content is replaced, the entry stands.
-        if self.is_waiting(id) {
-            return Some(id);
+        match self.slot_of(id) {
+            // Still on its way out: its content is replaced, the entry stands.
+            Some(slot) if slot.queued() => return Some(id),
+            // Accepted, so Internet Identity holds a notification whose content
+            // has just changed. Sending it again replaces that one.
+            Some(_) => {
+                self.unplace(id);
+            }
+            None => {}
         }
 
         let entry = Entry {
@@ -231,24 +293,26 @@ impl Store {
             lane: lane_of(notification.urgency) as u8,
             expires_at: notification.expires_at.unwrap_or(default_expiry),
             due_at: now,
-            parked: false,
+            retried: false,
         };
-        self.entries.insert(entry.waiting_key(), entry);
+        self.place(entry, keys::WAITING, entry.expires_at);
 
         Some(id)
     }
 
     /// Returns parked entries to their lanes once they are due.
     pub fn promote(&mut self, now: u64) {
-        let due: Vec<(EntryKey, Entry)> = self
+        let due: Vec<Entry> = self
             .entries
             .range(EntryKey::parked_start()..=EntryKey::parked_due_by(now))
-            .map(|entry| entry.into_pair())
+            .filter_map(|row| match row.value() {
+                Row::Entry(entry) => Some(entry),
+                Row::Slot(_) => None,
+            })
             .collect();
 
-        for (key, entry) in due {
-            self.entries.remove(&key);
-            self.entries.insert(entry.waiting_key(), entry);
+        for entry in due {
+            self.place(entry, keys::WAITING, entry.expires_at);
         }
     }
 
@@ -274,14 +338,14 @@ impl Store {
                         .entries
                         .range(from..=EntryKey::lane_end(lane as u8))
                         .next()
-                        .map(|entry| entry.into_pair())
+                        .map(|row| row.into_pair())
                     {
-                        Some((key, entry)) => {
+                        Some((key, Row::Entry(entry))) => {
                             self.entries.remove(&key);
                             taken.push(entry);
                             progressed = true;
                         }
-                        None => {
+                        Some(_) | None => {
                             cursors[lane] = None;
                             break;
                         }
@@ -297,64 +361,98 @@ impl Store {
         taken
     }
 
-    /// Internet Identity took it; its content stays until it expires.
-    pub fn settle(&mut self, _entry: &Entry) {}
+    /// Internet Identity took it: nothing more to send, and its content waits
+    /// there for a pull until it expires.
+    pub fn settle(&mut self, entry: &Entry) {
+        self.place(*entry, keys::ACCEPTED, entry.expires_at);
+    }
 
-    /// One more attempt, just before the notification expires. `false` when
-    /// this was that attempt and the notification is now dropped.
-    pub fn park(&mut self, mut entry: Entry) -> bool {
-        if entry.parked {
+    /// One more attempt, later in the notification's window. `false` when this
+    /// was that attempt and the notification is now dropped.
+    pub fn park(&mut self, mut entry: Entry, now: u64) -> bool {
+        if entry.retried {
+            self.unplace(entry.id);
             self.release(entry.id);
             return false;
         }
 
-        entry.parked = true;
-        entry.due_at = entry.expires_at.saturating_sub(RETRY_LEAD);
-        self.entries.insert(entry.parked_key(), entry);
+        entry.retried = true;
+        entry.due_at = retry_at(now, entry.expires_at);
+        self.place(entry, keys::PARKED, entry.due_at);
         true
     }
 
-    /// Internet Identity asked for this one later.
+    /// Internet Identity asked for this one later. Not a refusal, so it does
+    /// not spend the second attempt.
     pub fn defer(&mut self, mut entry: Entry, retry_after: u64) {
         entry.due_at = retry_after;
-        self.entries.insert(entry.parked_key(), entry);
+        self.place(entry, keys::PARKED, entry.due_at);
     }
 
     /// Nothing was enqueued; the entry goes back unchanged.
     pub fn requeue(&mut self, mut entry: Entry, now: u64) {
         entry.due_at = now;
-        self.entries.insert(entry.waiting_key(), entry);
+        self.place(entry, keys::WAITING, entry.expires_at);
     }
 
-    /// Discards what is past its expiry; Internet Identity would refuse it.
-    pub fn drop_expired(&mut self, batch: Vec<Entry>, now: u64) -> (Vec<Entry>, usize) {
-        let before = batch.len();
-        let live: Vec<Entry> = batch
-            .into_iter()
-            .filter(|entry| {
-                let live = entry.expires_at > now;
-                if !live {
-                    self.release(entry.id);
-                }
-                live
-            })
+    /// What a batch may no longer be sent: anything past its expiry, which
+    /// Internet Identity would refuse, and anything the app has since
+    /// dismissed. Only an expiry counts as a drop; a dismissal is the app
+    /// getting what it asked for.
+    pub fn sendable(&mut self, batch: Vec<Entry>, now: u64) -> (Vec<Entry>, usize) {
+        let mut live = Vec::with_capacity(batch.len());
+        let mut expired = 0;
+
+        for entry in batch {
+            if entry.expires_at <= now {
+                self.unplace(entry.id);
+                self.release(entry.id);
+                expired += 1;
+            } else if self.content.contains_key(&entry.id) {
+                live.push(entry);
+            } else {
+                self.unplace(entry.id);
+            }
+        }
+
+        (live, expired)
+    }
+
+    /// Drops what an expired notification was still holding. Internet Identity
+    /// will not pull content it can no longer deliver.
+    pub fn sweep(&mut self, now: u64) {
+        let expired: Vec<NotificationId> = self
+            .entries
+            .range(EntryKey::accepted_start()..=EntryKey::accepted_expired_by(now))
+            .map(|row| row.key().id())
             .collect();
 
-        let dropped = before - live.len();
-        (live, dropped)
+        for id in expired {
+            self.unplace(id);
+            self.release(id);
+        }
     }
 
-    /// Drops the content, so a pull finds nothing.
+    /// The app says this no longer needs anyone's attention: it leaves the
+    /// outbox, and its content goes so a pull finds nothing.
     pub fn dismiss(&mut self, recipient: Principal, key: &str) {
-        self.release(ids::keyed(recipient, key));
+        let id = ids::keyed(recipient, key);
+        self.unplace(id);
+        self.release(id);
     }
 
     pub fn content_of(&self, id: NotificationId) -> Option<Content> {
         self.content.get(&id).map(|StoredContent(content)| content)
     }
 
+    /// `false` when there is no such notification to have received.
+    pub fn holds(&self, id: NotificationId) -> bool {
+        self.content.contains_key(&id)
+    }
+
+    /// Notifications waiting for Internet Identity to accept them.
     pub fn backlog(&self) -> u64 {
-        self.entries.len()
+        self.meta().queued
     }
 
     pub fn batch_limit(&self) -> usize {
@@ -373,10 +471,11 @@ impl Store {
 
     pub fn note(&mut self, why: Misconfigured, now: u64) {
         let mut meta = self.meta();
-        if meta.misconfigured.map(|m| m.why) != Some(why) {
-            meta.misconfigured = Some(MisconfiguredSince { why, since: now });
-            self.set_meta(meta);
+        if meta.misconfigured.map(|since| since.why) == Some(why) {
+            return;
         }
+        meta.misconfigured = Some(MisconfiguredSince { why, since: now });
+        self.set_meta(meta);
     }
 
     pub fn is_seeded(&self) -> bool {
@@ -394,7 +493,7 @@ impl Store {
     pub fn record(&mut self, now: u64, event: Event, count: u64) {
         let start = now - (now % HOUR);
         let mut bucket = match self.rows.get(&start) {
-            Some(Row::Hour(bucket)) => bucket,
+            Some(MetricsRow::Hour(bucket)) => bucket,
             _ => Bucket {
                 start,
                 ..Bucket::default()
@@ -409,7 +508,7 @@ impl Store {
             Event::Dropped => bucket.dropped += count,
         }
 
-        self.rows.insert(start, Row::Hour(bucket));
+        self.rows.insert(start, MetricsRow::Hour(bucket));
 
         // One row is the counters rather than an hour.
         while self.rows.len() as usize > KEEP_HOURS + 1 {
@@ -431,19 +530,58 @@ impl Store {
         self.rows
             .range(COUNTERS_ROW + 1..)
             .filter_map(|row| match row.value() {
-                Row::Hour(bucket) => Some(bucket),
-                Row::Counters(_) => None,
+                MetricsRow::Hour(bucket) => Some(bucket),
+                MetricsRow::Counters(_) => None,
             })
             .collect()
     }
 
-    /// `false` when there is no such notification to have received.
-    pub fn mark_received(&mut self, id: NotificationId) -> bool {
-        self.content.contains_key(&id)
+    fn slot_of(&self, id: NotificationId) -> Option<Slot> {
+        match self.entries.get(&EntryKey::slot(id)) {
+            Some(Row::Slot(slot)) => Some(slot),
+            _ => None,
+        }
     }
 
-    fn is_waiting(&self, id: NotificationId) -> bool {
-        self.entries.range(..).any(|entry| entry.key().id() == id)
+    /// Puts an entry in one of the three orders and records where it went.
+    fn place(&mut self, entry: Entry, kind: u8, at: u64) {
+        let slot = Slot {
+            kind,
+            lane: entry.lane,
+            expires_at: entry.expires_at,
+            due_at: at,
+        };
+
+        let was = self.slot_of(entry.id);
+        if let Some(old) = was {
+            self.entries.remove(&old.key(entry.id));
+        }
+
+        self.entries.insert(slot.key(entry.id), Row::Entry(entry));
+        self.entries
+            .insert(EntryKey::slot(entry.id), Row::Slot(slot));
+        self.count(was.is_some_and(|old| old.queued()), slot.queued());
+    }
+
+    /// Takes an entry out of every order it is in.
+    fn unplace(&mut self, id: NotificationId) {
+        let Some(slot) = self.slot_of(id) else { return };
+        self.entries.remove(&slot.key(id));
+        self.entries.remove(&EntryKey::slot(id));
+        self.count(slot.queued(), false);
+    }
+
+    fn count(&mut self, was_queued: bool, is_queued: bool) {
+        if was_queued == is_queued {
+            return;
+        }
+        let mut meta = self.meta();
+        meta.queued = if is_queued {
+            meta.queued + 1
+        } else {
+            meta.queued.saturating_sub(1)
+        };
+        self.set_meta(meta);
     }
 
     fn release(&mut self, id: NotificationId) {
@@ -456,26 +594,25 @@ impl Store {
 
     /// Sheds the outbox, lowest lane first. Never accepted content: a pull
     /// has to find it.
-    fn shed(&mut self, mut bytes: u64, capacity_bytes: u64, needed: u64) -> u64 {
+    fn shed(&mut self, capacity_bytes: u64, needed: u64) {
         for lane in (0..LANES).rev() {
-            while bytes + needed > capacity_bytes {
-                let Some((key, entry)) = self
+            while self.meta().bytes + needed > capacity_bytes {
+                let Some(entry) = self
                     .entries
                     .range(EntryKey::lane_start(lane)..=EntryKey::lane_end(lane))
                     .next()
-                    .map(|entry| entry.into_pair())
+                    .and_then(|row| match row.value() {
+                        Row::Entry(entry) => Some(entry),
+                        Row::Slot(_) => None,
+                    })
                 else {
                     break;
                 };
 
-                self.entries.remove(&key);
-                if let Some(StoredContent(content)) = self.content.remove(&entry.id) {
-                    bytes = bytes.saturating_sub(size_of_content(&content));
-                }
+                self.unplace(entry.id);
+                self.release(entry.id);
             }
         }
-
-        bytes
     }
 }
 
@@ -574,24 +711,40 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_parks_until_expiry_and_a_second_one_drops_it() {
+    fn a_refusal_parks_inside_the_window_and_a_second_one_drops_it() {
         let mut store = store();
         let id = store
-            .add(alice(), note("x", Some("k"), None), 10 * HOUR, ROOMY, 0)
+            .add(alice(), note("x", Some("k"), None), 30 * HOUR, ROOMY, 0)
             .unwrap();
 
         let first = store.take(10);
-        assert!(store.park(first[0]));
+        assert!(store.park(first[0], 0));
 
         store.promote(HOUR);
         assert!(store.take(10).is_empty(), "not due yet");
 
-        store.promote(10 * HOUR);
+        store.promote(20 * HOUR);
         let second = store.take(10);
         assert_eq!(second.len(), 1);
-        assert!(!store.park(second[0]), "second refusal drops it");
+        assert!(
+            second[0].due_at < second[0].expires_at,
+            "the attempt lands before the expiry it is for"
+        );
+        assert!(
+            !store.park(second[0], 20 * HOUR),
+            "a second refusal drops it"
+        );
         assert!(store.content_of(id).is_none());
         assert_eq!(store.backlog(), 0);
+    }
+
+    #[test]
+    fn a_five_minute_notification_still_gets_its_second_attempt() {
+        let five_minutes = 300_000_000_000;
+        let due = retry_at(0, five_minutes);
+
+        assert!(due > 0, "not immediately, or the attempt is the same call");
+        assert!(due < five_minutes, "and not after it has expired");
     }
 
     #[test]
@@ -621,6 +774,53 @@ mod tests {
     }
 
     #[test]
+    fn accepted_content_goes_when_the_notification_expires() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+
+        let batch = store.take(10);
+        store.settle(&batch[0]);
+        assert_eq!(store.backlog(), 0, "accepted is not backlog");
+
+        store.sweep(HOUR - 1);
+        assert!(store.holds(id), "a channel may still pull it");
+
+        store.sweep(HOUR);
+        assert!(!store.holds(id), "nothing will pull it now");
+    }
+
+    #[test]
+    fn a_dismissed_notification_is_never_sent() {
+        let mut store = store();
+        store.add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0);
+        store.dismiss(alice(), "k");
+
+        assert_eq!(store.backlog(), 0);
+        let batch = store.take(10);
+        let (live, expired) = store.sendable(batch, 0);
+        assert!(live.is_empty());
+        assert_eq!(expired, 0, "a dismissal is not a delivery failure");
+    }
+
+    #[test]
+    fn an_expired_notification_is_dropped_rather_than_sent() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+
+        let batch = store.take(10);
+        let (live, expired) = store.sendable(batch, HOUR);
+
+        assert!(live.is_empty());
+        assert_eq!(expired, 1);
+        assert!(!store.holds(id));
+        assert_eq!(store.backlog(), 0);
+    }
+
+    #[test]
     fn hours_accumulate_and_the_ring_keeps_a_month() {
         let mut store = store();
         store.record(5 * HOUR + 1, Event::Sent, 3);
@@ -644,9 +844,9 @@ mod tests {
             .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
             .unwrap();
 
-        assert!(store.mark_received(id));
+        assert!(store.holds(id));
         store.dismiss(alice(), "k");
-        assert!(!store.mark_received(id), "nothing left to have received");
+        assert!(!store.holds(id), "nothing left to have received");
     }
 
     #[test]
@@ -660,8 +860,6 @@ mod tests {
             ids::keyed(alice(), "k")
         };
 
-        // What an upgrade does: the same memories, a fresh handle, nothing
-        // serialised in between.
         let reopened = Store::new(manager, MEMORY_IDS);
         assert!(reopened.content_of(id).is_some(), "content survives");
         assert_eq!(reopened.backlog(), 1, "the outbox survives");

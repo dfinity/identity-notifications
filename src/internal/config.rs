@@ -1,5 +1,5 @@
-//! Two environment variables and a default, read once: a canister's
-//! environment does not change under it.
+//! Three environment variables, one of them optional. Read on use: a
+//! canister's environment does not change under it.
 
 use crate::types::Misconfigured;
 use candid::Principal;
@@ -13,8 +13,7 @@ pub struct Config {
     pub capacity_bytes: usize,
 }
 
-/// Missing configuration is a deployment mistake rather than something an app
-/// can handle, so it is reported rather than guessed at.
+/// Missing configuration is reported rather than guessed at.
 #[cfg(target_arch = "wasm32")]
 pub fn read() -> Result<Config, Misconfigured> {
     use ic_cdk::api::{env_var_name_exists, env_var_value};
@@ -49,8 +48,7 @@ pub fn read() -> Result<Config, Misconfigured> {
     })
 }
 
-/// Off-canister there is no environment to read, so a host build reports the
-/// same thing a canister with no configuration would.
+/// Off-canister there is no environment to read.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read() -> Result<Config, Misconfigured> {
     Err(Misconfigured::Origin)

@@ -29,9 +29,8 @@
 //! }
 //! ```
 //!
-//! Configured by environment variables — `notification_sender`,
-//! `notification_origin`, and optionally `notification_capacity_mb` — so
-//! nothing about a deployment is compiled in.
+//! Configured by environment variables: `notification_sender`,
+//! `notification_origin`, and optionally `notification_capacity_mb`.
 
 pub mod internal;
 pub mod types;
@@ -54,18 +53,21 @@ pub use types::{
     SenderInfo, Urgency,
 };
 
-/// How long sends accumulate before one call carries them. Everything waits
-/// for it, urgency included: urgency decides lane order, not call timing.
+/// How long sends accumulate before one call carries them. Urgency decides
+/// lane order, not call timing, so everything waits for it.
 const COALESCE: Duration = Duration::from_secs(2);
 
-/// Until `TooManyNotifications` says otherwise.
+/// What Internet Identity accepts in one call, until `TooManyNotifications`
+/// says otherwise.
 const BATCH_GUESS: usize = 1_000;
 
-const DEFAULT_RETENTION: u64 = 86_400_000_000_000;
+/// Internet Identity's own default, mirrored so the outbox orders and expires
+/// notifications by the window they actually have.
+const II_DEFAULT_RETENTION_NS: u64 = 5 * 60 * 1_000_000_000;
 
 thread_local! {
-    /// Everything durable lives in stable memory; what is here is the handle
-    /// to it, plus two flags that only matter within one execution round.
+    /// Everything durable is in stable memory; what is here is the handle to
+    /// it, plus two flags that only matter within one execution round.
     static STORE: RefCell<Option<Store>> = const { RefCell::new(None) };
     static FLUSH_ARMED: RefCell<bool> = const { RefCell::new(false) };
     static FLUSHING: RefCell<bool> = const { RefCell::new(false) };
@@ -92,11 +94,9 @@ thread_local! {
 ///         notifications::init(
 ///             manager,
 ///             Memories {
-///                 outbox: MemoryId::new(10),
-///                 parked: MemoryId::new(11),
-///                 content: MemoryId::new(12),
-///                 metrics: MemoryId::new(13),
-///                 bookkeeping: MemoryId::new(14),
+///                 entries: MemoryId::new(10),
+///                 content: MemoryId::new(11),
+///                 metrics: MemoryId::new(12),
 ///             },
 ///         )
 ///     });
@@ -137,7 +137,7 @@ pub fn send(recipient: Principal, notification: Notification) {
         store.add(
             recipient,
             notification,
-            now + DEFAULT_RETENTION,
+            now + II_DEFAULT_RETENTION_NS,
             config.capacity_bytes as u64,
             now,
         )
@@ -185,7 +185,7 @@ pub fn notification_received(id: NotificationId) {
     }
     let now = time();
     with_store(|store| {
-        if store.mark_received(id) {
+        if store.holds(id) {
             store.record(now, Event::Received, 1);
         }
     });
@@ -265,9 +265,10 @@ async fn flush_once() {
 
     let now = time();
     let batch = with_store(|store| {
+        store.sweep(now);
         store.promote(now);
         let batch = store.take(store.batch_limit());
-        let (live, expired) = store.drop_expired(batch, now);
+        let (live, expired) = store.sendable(batch, now);
         if expired > 0 {
             store.record(now, Event::Dropped, expired as u64);
         }
@@ -316,13 +317,11 @@ async fn send_batch(config: &Config, batch: &[Entry]) -> Outcome {
             ii::SendNotificationError::NoSuchSender => Outcome::NotAuthorized,
             ii::SendNotificationError::InternalCanisterError(_) => Outcome::Unreachable,
         },
-        // A reply we cannot read is no more actionable than no reply at all.
         Ok(Err(_)) | Err(_) => Outcome::Unreachable,
     }
 }
 
-/// A random offset for counter ids, so two canisters sending for one origin
-/// do not both hand out the same low numbers.
+/// A random offset for counter ids, taken once.
 async fn seed_ids() {
     let reply = Call::unbounded_wait(Principal::management_canister(), "raw_rand").await;
 

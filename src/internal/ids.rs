@@ -1,10 +1,8 @@
 //! Notification ids, which Internet Identity scopes to `(origin, recipient)`.
 //!
-//! A keyed id is derived rather than remembered: the same `(recipient, key)`
-//! always yields the same id, so an update supersedes its predecessor after an
-//! upgrade, after the content has been swept, and after the app has forgotten
-//! it ever sent anything. A table would have to be evicted or grow forever,
-//! and both are wrong.
+//! A keyed id is derived, not remembered: the same `(recipient, key)` always
+//! yields the same id, so an update supersedes its predecessor even after an
+//! upgrade or a sweep.
 
 use candid::Principal;
 use sha2::{Digest, Sha256};
@@ -26,10 +24,8 @@ pub fn keyed(recipient: Principal, key: &str) -> u64 {
     KEYED | (leading & (KEYED - 1))
 }
 
-/// Counter ids start from a random offset rather than from one, so two
-/// canisters sending for the same origin — a relay and its replacement, or a
-/// deployment that broke the one-sender rule — do not both hand out the same
-/// low numbers.
+/// Counter ids start from a random offset, so two canisters sending for one
+/// origin do not both hand out the same low numbers.
 pub fn keyless(seed: u64, counter: u64) -> u64 {
     seed.wrapping_add(counter) & (KEYED - 1)
 }
@@ -67,8 +63,6 @@ mod tests {
 
     #[test]
     fn a_length_prefix_stops_two_spellings_meeting() {
-        // Without it, a recipient whose bytes end where a key begins could
-        // collide with a shorter recipient and a longer key.
         assert_ne!(keyed(alice(), "b-chat"), keyed(alice(), "bchat"));
     }
 

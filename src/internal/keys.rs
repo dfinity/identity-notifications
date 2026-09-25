@@ -1,14 +1,18 @@
 //! The key for the entry map.
 //!
 //! A map is ordered by the bytes its key encodes to, so fields go big-endian
-//! in the order they should sort by. The leading byte separates waiting from
-//! parked entries, which is what lets one map order each kind differently.
+//! in the order they should sort by, and the leading byte separates the kinds
+//! of row: what is waiting to be sent, what is waiting for a second attempt,
+//! what Internet Identity accepted, and one row per notification saying which
+//! of those it is in.
 
 use ic_stable_structures::storable::{Bound, Storable};
 use std::borrow::Cow;
 
-const WAITING: u8 = 0;
-const PARKED: u8 = 1;
+pub const WAITING: u8 = 0;
+pub const PARKED: u8 = 1;
+pub const ACCEPTED: u8 = 2;
+const SLOT: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntryKey {
@@ -39,6 +43,27 @@ impl EntryKey {
         }
     }
 
+    /// Sent and accepted: ordered by expiry, which is when its content goes.
+    pub fn accepted(expires_at: u64, id: u64) -> Self {
+        Self {
+            kind: ACCEPTED,
+            first: expires_at,
+            second: 0,
+            id,
+        }
+    }
+
+    /// Where this notification is, so a repeat of a key finds it in one look
+    /// instead of a scan.
+    pub fn slot(id: u64) -> Self {
+        Self {
+            kind: SLOT,
+            first: 0,
+            second: 0,
+            id,
+        }
+    }
+
     pub fn lane_start(lane: u8) -> Self {
         Self::waiting(lane, 0, 0)
     }
@@ -53,6 +78,14 @@ impl EntryKey {
 
     pub fn parked_due_by(now: u64) -> Self {
         Self::parked(now, u64::MAX)
+    }
+
+    pub fn accepted_start() -> Self {
+        Self::accepted(0, 0)
+    }
+
+    pub fn accepted_expired_by(now: u64) -> Self {
+        Self::accepted(now, u64::MAX)
     }
 
     pub fn id(&self) -> u64 {
@@ -121,15 +154,20 @@ mod tests {
     }
 
     #[test]
-    fn parked_sorts_after_everything_waiting() {
-        assert!(
-            encoded(EntryKey::waiting(3, u64::MAX, u64::MAX)) < encoded(EntryKey::parked(0, 0))
-        );
+    fn the_kinds_sort_into_separate_ranges() {
+        let waiting = encoded(EntryKey::waiting(3, u64::MAX, u64::MAX));
+        let parked = encoded(EntryKey::parked(u64::MAX, u64::MAX));
+        let accepted = encoded(EntryKey::accepted(u64::MAX, u64::MAX));
+
+        assert!(waiting < encoded(EntryKey::parked(0, 0)));
+        assert!(parked < encoded(EntryKey::accepted(0, 0)));
+        assert!(accepted < encoded(EntryKey::slot(0)));
     }
 
     #[test]
-    fn parked_sorts_by_when_it_is_due() {
+    fn parked_sorts_by_when_it_is_due_and_accepted_by_expiry() {
         assert!(encoded(EntryKey::parked(5, 99)) < encoded(EntryKey::parked(6, 0)));
+        assert!(encoded(EntryKey::accepted(5, 99)) < encoded(EntryKey::accepted(6, 0)));
     }
 
     #[test]
@@ -142,6 +180,8 @@ mod tests {
         for key in [
             EntryKey::waiting(3, u64::MAX, 42),
             EntryKey::parked(7, u64::MAX),
+            EntryKey::accepted(9, 42),
+            EntryKey::slot(42),
         ] {
             assert_eq!(EntryKey::from_bytes(key.to_bytes()), key);
         }

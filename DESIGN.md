@@ -65,10 +65,10 @@ import Types "mo:identity-notifications/Types";
 
 There are no handlers to implement and no library state for the app to keep.
 Everything that can go wrong is either the library's to absorb — parking a
-refused notification until its expiry, backing off a saturated origin — or
+refused notification for later in its window, backing off a saturated origin — or
 something the app reads when it wants it, from `metrics`.
 
-### A refusal parks the notification until its expiry
+### A refusal parks the notification for later in its window
 
 Two refusals mean nothing will reach this account right now: `NoSuchRecipient`
 (II holds no record for it, typically because the user has not signed in to the
@@ -76,14 +76,16 @@ app in long enough) and `NoChannel` (they have no channel enabled). Both are
 fixed by the user — signing in, or turning notifications on — and neither is
 fixed by trying again a second later.
 
-So the entry is not dropped. Its next attempt is set to just before its own
-expiry and it goes back in the queue, which already orders by expiry, so it
-surfaces at the right moment with no timer and no bookkeeping of its own. The
-user has the whole window to come back, and if they do, they get the
-notification rather than nothing.
+So the entry is not dropped. Its next attempt is set two thirds of the way
+through what is left of its window, and it goes back in the queue, which orders
+by when entries come up, so it surfaces at the right moment with no timer and
+no bookkeeping of its own. A fraction rather than a fixed lead is what makes
+that work at both ends: II's default window is five minutes, where a lead of
+minutes would land at or after the expiry and there would be no second attempt
+at all, and a day-long campaign still waits most of its day.
 
 Every notification therefore gets at most two attempts: one when it is sent and
-one near its expiry. If the second fails it is dropped and counted in the
+one later in its window. If the second fails it is dropped and counted in the
 bucket's `dropped`. Cost is bounded by what the app sends, not by how many dead
 recipients it has.
 
@@ -94,10 +96,8 @@ message to a group of ten thousand mostly-dead members costs ten thousand
 refusals, and every message after it costs none.
 
 There is no per-recipient state anywhere in this: no suppression table, no
-backoff, no probes, and nothing for the app to call when a user comes back. An
-earlier draft had all four, plus an `active(recipient)` the app was expected to
-sprinkle through its own methods. Parking the entry it already holds does the
-same work with none of it.
+backoff, no probes, and nothing for the app to call when a user comes back.
+Parking the entry the library already holds does that work without any of it.
 
 ### One injected name
 
@@ -355,8 +355,8 @@ queue limits.
 The response drives everything:
 
 - `Ok { not_accepted = [] }` — done, entries stay in `pending` until they expire.
-- `NoSuchRecipient` / `NoChannel` — that user cannot be reached; drop the content
-  and parks it until near its expiry for one more attempt.
+- `NoSuchRecipient` / `NoChannel` — that user cannot be reached right now; the
+  entry parks for one more attempt later in its window.
 - `Deferred { retry_after }` — keep the entry in the outbox and arm a timer for
   `retry_after`. No capacity is wasted retrying earlier.
 - `Err(TooManyNotifications { limit })` — record `limit`, re-split, send again in
@@ -440,16 +440,12 @@ freeing space by breaking accepted ones. Both cases count in the bucket's
 `dropped`, and the backlog gauge pins at the ceiling, so an app living there
 looks different from one passing through.
 
-An earlier rule said "oldest keyless entries first", which was wrong twice
-over: a chat app keys everything, so it named nothing to drop, and age is a poor
-proxy for cost — the oldest entry is usually an accepted one holding up a
-visible notification, while the cheapest thing to lose is the newest tail of a
-campaign nobody knows about yet.
-
-The number that matters is not the ceiling though: content stays pending until
-it expires, so steady state is roughly II's retention window times the app's
-send rate. An app that genuinely lives near a gigabyte should raise the
-variable, which is exactly why it is one.
+The number that matters is not the ceiling though. Content is dropped the
+moment its notification expires — Internet Identity will not pull what it can
+no longer deliver, so keeping it past that point would be pure accumulation —
+which puts steady state at roughly II's retention window times the app's send
+rate. An app that genuinely lives near a gigabyte should raise the variable,
+which is exactly why it is one.
 
 ### One sender per origin
 
@@ -704,7 +700,7 @@ public type Notification = {
   url       : ?Text;       // where acting on it takes them, on a known origin
   key       : ?Text;       // the thing this is about; same key updates it
   urgency   : ?Urgency;    // null = Normal
-  expiresAt : ?Time.Time;  // null = II's default retention
+  expiresAt : ?Time.Time;  // null = II's default retention, five minutes
 };
 
 // What a channel pulls back out. The rest never leaves this canister.
@@ -827,8 +823,8 @@ behaviour or a question the app asks:
 
 | what happens | where it goes |
 | --- | --- |
-| II holds no record for the account | parked until near its expiry, tried once more, then counted in `dropped` |
-| the account has no channel | parked the same way; the user has the whole window to turn notifications on |
+| II holds no record for the account | parked for later in its window, tried once more, then counted in `dropped` |
+| the account has no channel | parked the same way; the user has most of the window to turn notifications on |
 | accepted, expired with nobody receiving it | counted in `dropped` |
 | deferred until expiry, drops, saturation | `metrics()` — `deferred` climbing, then `dropped` |
 | misconfiguration | `metrics().misconfigured`, and a canister log line |
@@ -916,8 +912,8 @@ app's decision, not the library's.
 
 | what happens | who sees it | what the library does |
 | --- | --- | --- |
-| `NoSuchRecipient` | the bucket's `dropped`, if the second attempt fails too | parks the entry until near its expiry and tries once more; II holds no record for the account, usually because the user has not signed in to the app in long enough |
-| `NoChannel` | the bucket's `dropped`, if the second attempt fails too | parks the entry until near its expiry; only the user can fix it, by enabling notifications in II, and now they have the whole window to |
+| `NoSuchRecipient` | the bucket's `dropped`, if the second attempt fails too | parks the entry for later in its window and tries once more; II holds no record for the account, usually because the user has not signed in to the app in long enough |
+| `NoChannel` | the bucket's `dropped`, if the second attempt fails too | parks the entry for later in its window; only the user can fix it, by enabling notifications in II, and now they have most of the window to |
 | `Deferred { retry_after }` | the bucket's `deferred` | keeps the entry, retries at `retry_after`, and keeps doing so until `expiresAt` |
 | deferred past `expiresAt` | the bucket's `dropped`; no callback, since it is the origin being saturated rather than anything about the user | drops it; II would refuse it anyway |
 | accepted, expired with no receipt | the bucket's `dropped` | sweeps the content; nobody was reachable before it aged out |
@@ -1009,13 +1005,14 @@ field, which stops an app compiling rather than quietly taking an id it was
 already using.
 
 Three, because that is as few as it can be without a cost. An app does not care
-how the library stores anything, so anything that merges for free should: the
-waiting and parked entries are one map told apart by a leading byte in the key,
-which keeps each kind in its own contiguous range and lets each be ordered by
-what suits it, and the counters are one reserved row of the metrics map. Content
-stays apart for a real reason: `StableBTreeMap` sizes its nodes from the value
-bound, and content runs to 8KB where an entry is 64 bytes, so sharing would make
-every entry pay for the larger bound.
+how the library stores anything, so anything that merges for free should: what
+is waiting, what is parked, what has been accepted, and where each notification
+is are four kinds of row in one map, told apart by a leading byte in the key, so
+each kind keeps its own contiguous range and its own order; and the counters are
+one reserved row of the metrics map. Content stays apart for a real reason:
+`StableBTreeMap` sizes its nodes from the value bound, and content runs to 8KB
+where a row is 66 bytes, so sharing would make every row pay for the larger
+bound.
 
 A closure the library calls for each memory it wants would be shorter, and was
 rejected: the closure would have to return the same memories in the same order
@@ -1026,7 +1023,10 @@ Named fields have no order to get wrong.
 That also replaces the lane heaps with ordered keys: `(lane, expires_at, id)`
 sorts a lane by expiry, so taking a batch is a range scan and the ordering
 survives an upgrade because it was never stored. Parked entries sort by
-`(due_at, id)`, so promoting what is due is a scan from the start of that map.
+`(due_at, id)` and accepted ones by `(expires_at, id)`, so promoting what is due
+and sweeping what has expired are both scans from the start of a range. The
+fourth kind of row is one per notification saying which of the three it is in,
+which is what makes a repeat of a key a lookup rather than a walk of the map.
 
 **A notification is a struct literal, not a builder.** Motoko writes the
 record out with `null` for what it does not set; Rust writes the fields it

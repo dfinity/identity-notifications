@@ -9,13 +9,11 @@ use std::collections::HashMap;
 pub enum Outcome {
     /// Sent, with whatever Internet Identity would not take.
     Answered(Vec<ii::NotAccepted>),
-    /// The batch was too large. Nothing was enqueued, so it is safe to split
-    /// and send again — and the limit is worth remembering.
+    /// The batch was too large, and nothing in it was enqueued.
     TooMany(usize),
-    /// Internet Identity refuses everything from this canister until the
-    /// origin publishes it as a sender.
+    /// The origin does not publish this canister as one of its senders.
     NotAuthorized,
-    /// The call itself failed. Entries go back for their second attempt.
+    /// The call itself failed.
     Unreachable,
 }
 
@@ -34,9 +32,7 @@ pub fn arg(origin: &str, batch: &[Entry]) -> ii::SendNotificationArg {
     }
 }
 
-/// Applies an outcome to the batch that produced it. Entries not named in
-/// `not_accepted` were taken, so they leave the outbox — what remains of them
-/// is content a channel may pull.
+/// Applies an outcome to the batch that produced it.
 pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
     store.record(now, Event::Sent, batch.len() as u64);
 
@@ -63,7 +59,7 @@ pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
                     // No such recipient, or no channel: the user fixes both,
                     // and has until the notification expires to do it.
                     Some(_) => {
-                        if !store.park(entry) {
+                        if !store.park(entry, now) {
                             store.record(now, Event::Dropped, 1);
                         }
                     }
@@ -73,14 +69,12 @@ pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
 
         Outcome::Unreachable => {
             for entry in batch {
-                if !store.park(entry) {
+                if !store.park(entry, now) {
                     store.record(now, Event::Dropped, 1);
                 }
             }
         }
 
-        // Nothing was enqueued. The entries go back where they came from, to
-        // be sent again once the batch is split or the origin is fixed.
         Outcome::TooMany(_) | Outcome::NotAuthorized => {
             for entry in batch {
                 store.requeue(entry, now);

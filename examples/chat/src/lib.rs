@@ -15,9 +15,10 @@ use std::cell::RefCell;
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// This app's conversations. The library's memories are named where it is
-/// handed them, below.
+/// This app's own memories. The library's are named where it is handed them,
+/// below.
 const CHATS_MEMORY: MemoryId = MemoryId::new(0);
+const READ_MEMORY: MemoryId = MemoryId::new(4);
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -57,6 +58,10 @@ thread_local! {
 
     static CHATS: RefCell<StableBTreeMap<String, Conversation, Memory>> = RefCell::new(
         StableBTreeMap::init(MEMORIES.with_borrow(|manager| manager.get(CHATS_MEMORY))),
+    );
+
+    static READ: RefCell<StableBTreeMap<String, u64, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORIES.with_borrow(|manager| manager.get(READ_MEMORY))),
     );
 }
 
@@ -113,9 +118,7 @@ fn send_to_group(id: String, text: String) {
     post(&id, msg_caller(), text);
 }
 
-/// Everyone in the conversation except the sender hears about it, and the
-/// conversation is what the notification is about — so the next message
-/// updates that notification rather than adding another beside it.
+/// Everyone in the conversation except the sender hears about it.
 fn post(id: &str, from: Principal, text: String) {
     let members = CHATS.with_borrow_mut(|chats| {
         let Some(mut conversation) = chats.get(&id.to_string()) else {
@@ -153,6 +156,7 @@ fn post(id: &str, from: Principal, text: String) {
 #[update]
 fn mark_read(id: String, up_to: u64) {
     let caller = msg_caller();
+    READ.with_borrow_mut(|read| read.insert(format!("{caller}|{id}"), up_to));
 
     let newest = CHATS.with_borrow(|chats| {
         chats
