@@ -16,6 +16,8 @@ identity-notifications = "0.1"
 ```
 
 ```rust
+use candid::Principal;
+use ic_cdk::api::msg_caller;
 use ic_cdk::{init, post_upgrade, update};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use ic_stable_structures::DefaultMemoryImpl;
@@ -51,7 +53,8 @@ fn init() {
 }
 
 #[update]
-fn send_message(to: candid::Principal, text: String) {
+fn send_message(to: Principal, text: String) {
+    let from = msg_caller();
     // ... store the message ...
 
     notifications::send(
@@ -59,10 +62,11 @@ fn send_message(to: candid::Principal, text: String) {
         Notification {
             title: "New message".into(),
             body: text,
-            url: Some("https://chat.example.com/chats".into()),
-            // Names what this is about, so the next message updates this
-            // notification instead of stacking another one beside it.
-            key: Some("chat-alice".into()),
+            // The conversation they will land in, on your own origin.
+            url: Some(format!("https://chat.example.com/chats/{from}")),
+            // The same conversation, named: the next message from `from`
+            // updates this notification instead of stacking another beside it.
+            key: Some(format!("chat-{from}")),
             ..Default::default()
         },
     );
@@ -72,7 +76,7 @@ fn send_message(to: candid::Principal, text: String) {
 Two more calls, and that is the whole app-facing surface:
 
 ```rust
-notifications::dismiss(recipient, "chat-alice"); // no longer needs attention
+notifications::dismiss(recipient, &format!("chat-{from}")); // no longer needs attention
 notifications::metrics();                        // the pipeline, hour by hour
 ```
 

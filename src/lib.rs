@@ -4,6 +4,8 @@
 //! content Internet Identity pulls back, and the delivery metrics.
 //!
 //! ```ignore
+//! use candid::Principal;
+//! use ic_cdk::api::msg_caller;
 //! use ic_cdk::update;
 //! use identity_notifications as notifications;
 //! use notifications::Notification;
@@ -11,15 +13,16 @@
 //! notifications::endpoints!();
 //!
 //! #[update]
-//! fn send_message(to: candid::Principal, text: String) {
+//! fn send_message(to: Principal, text: String) {
+//!     let from = msg_caller();
 //!     // ... store the message ...
 //!     notifications::send(
 //!         to,
 //!         Notification {
 //!             title: "New message".into(),
 //!             body: text,
-//!             url: Some("https://chat.example.com/chats".into()),
-//!             key: Some("chat-alice".into()),
+//!             url: Some(format!("https://chat.example.com/chats/{from}")),
+//!             key: Some(format!("chat-{from}")),
 //!             ..Default::default()
 //!         },
 //!     );
