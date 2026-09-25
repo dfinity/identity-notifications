@@ -1,5 +1,5 @@
 {
-  "name": "motoko-identity-notifications",
+  "name": "identity-notifications-motoko",
   "private": true,
   "scripts": {
     "format": "prettier --write \"src/**/*.mo\" \"test/**/*.mo\"",

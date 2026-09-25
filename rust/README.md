@@ -4,9 +4,8 @@ Notify Internet Identity users from a Rust canister. One call to send; the
 library handles ids, batching, retries, the content Internet Identity pulls
 back, and the delivery metrics.
 
-**Status: implemented, not yet released.** [DESIGN.md](DESIGN.md) is the design
-it follows. The Motoko sibling lives in
-[motoko-identity-notifications](https://github.com/dfinity/motoko-identity-notifications).
+**Status: implemented, not yet released.** [DESIGN.md](../DESIGN.md) is the
+design it follows, and [../motoko](../motoko) is the same library in Motoko.
 
 ## Using it
 
@@ -102,5 +101,5 @@ timers do not survive an upgrade either.
 cargo test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). `examples/chat` is a chat canister with
+See [CONTRIBUTING.md](../CONTRIBUTING.md). `examples/chat` is a chat canister with
 one-to-one and group conversations, built as part of CI.

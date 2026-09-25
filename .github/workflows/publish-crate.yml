@@ -4,12 +4,15 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - v*.*.*
+      - rust-v*.*.*
 
 jobs:
   publish:
     runs-on: ubuntu-24.04
     environment: release
+    defaults:
+      run:
+        working-directory: rust
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

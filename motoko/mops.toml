@@ -5,7 +5,7 @@ description = "Notify Internet Identity users from a Motoko canister: one send c
 keywords = [ "internet-identity", "notifications", "web-push", "identity", "icp" ]
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/dfinity/motoko-identity-notifications"
+repository = "https://github.com/dfinity/identity-notifications"
 
 [dependencies]
 core = "2.5.0"

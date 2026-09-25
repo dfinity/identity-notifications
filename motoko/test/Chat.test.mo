@@ -95,7 +95,9 @@ func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
       {
         id = entry.id;
         recipient = entry.recipient;
-        reason = #Deferred { retry_after = Nat64.fromNat(Int.abs(now + MINUTE)) }
+        reason = #Deferred {
+          retry_after = Nat64.fromNat(Int.abs(now + MINUTE))
+        }
       }
     }
   );

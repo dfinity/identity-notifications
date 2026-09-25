@@ -1,4 +1,4 @@
-# Contributing to rust-identity-notifications
+# Contributing to identity-notifications
 
 Thank you for your interest in contributing ❤️
 
@@ -16,13 +16,23 @@ External contributions are accepted under the DFINITY [CLA](https://github.com/d
 ## Development
 
 ```
+cd motoko
+mops install
+mops test
+npm install && npm run format:check
+
+cd ../rust
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo build --release --target wasm32-unknown-unknown -p chat-example
 ```
 
-`src/internal/` holds the parts worth testing on their own — the lane queue, id
-derivation, the metrics ring, the outbox and the flush decisions. Nothing in
-there calls the system API, so `cargo test` runs it without a replica;
-`tests/scenarios.rs` drives the whole pipeline against a fake Internet Identity
-the same way.
+The two libraries follow one design document and are meant to stay in step, so
+a change to how either behaves belongs in both, along with the same test on
+each side.
+
+`motoko/src/Internal/` and `rust/src/internal/` hold the parts worth testing on
+their own — the lane queue, id derivation, the metrics ring, the outbox and the
+flush decisions. Nothing in there calls the system API, so the unit tests run
+without a replica; `motoko/test/Chat.test.mo` and `rust/tests/scenarios.rs`
+drive the whole pipeline against a fake Internet Identity the same way.

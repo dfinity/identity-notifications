@@ -1,8 +1,8 @@
 # identity-notifications — design
 
-This is the design both implementations follow. It is written against the
-Motoko library, which came first; the Rust differences are collected in
-Rust specifics at the end.
+This is the design both implementations follow — `motoko/` and `rust/` in this
+repo. It is written against the Motoko library, which came first; the Rust
+differences are collected in Rust specifics at the end.
 
 
 A Motoko library for apps that notify their users through Internet Identity.

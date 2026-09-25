@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.85"
 description = "Notify Internet Identity users from a Rust canister: one send call, the library handles the rest."
 license = "Apache-2.0"
-repository = "https://github.com/dfinity/rust-identity-notifications"
+repository = "https://github.com/dfinity/identity-notifications"
 keywords = ["internet-computer", "internet-identity", "notifications", "web-push", "icp"]
 categories = ["api-bindings", "wasm"]
 

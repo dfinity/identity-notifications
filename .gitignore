@@ -1,3 +1,6 @@
-/target
+/rust/target
+/motoko/.mops
+/motoko/node_modules
+.dfx
 **/*.wasm
 .DS_Store
