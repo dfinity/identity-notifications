@@ -139,7 +139,7 @@ fn message(key: &str, urgency: Option<Urgency>) -> Notification {
 }
 
 #[test]
-fn a_small_group_of_active_people_is_one_call() {
+fn a_small_group_of_active_people_is_one_batch() {
     let mut world = World::new(1_000);
     for i in 0..5 {
         world.reachable(user(i));

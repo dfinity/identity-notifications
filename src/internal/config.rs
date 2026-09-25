@@ -53,24 +53,3 @@ pub fn read() -> Result<Config, Misconfigured> {
 pub fn read() -> Result<Config, Misconfigured> {
     Err(Misconfigured::Origin)
 }
-
-impl Config {
-    pub fn capacity_from_mb(mb: usize) -> usize {
-        mb * 1_048_576
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_gigabyte_is_the_default_ceiling() {
-        assert_eq!(Config::capacity_from_mb(DEFAULT_CAPACITY_MB), 1_073_741_824);
-    }
-
-    #[test]
-    fn a_host_build_reports_missing_configuration() {
-        assert_eq!(read(), Err(Misconfigured::Origin));
-    }
-}

@@ -93,7 +93,8 @@ canisters:
 Nothing to do beyond calling `init` again. The outbox, the content a channel
 may still pull, the hourly metrics and the learned batch limit live in the
 stable memories you hand over, so an upgrade neither serialises nor restores
-any of it.
+any of it — and `init` arms a flush again if anything was still waiting, since
+timers do not survive an upgrade either.
 
 ## Development
 

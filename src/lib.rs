@@ -108,8 +108,14 @@ pub fn init(manager: &MemoryManager<DefaultMemoryImpl>, memories: Memories) {
         store.set_batch_limit(BATCH_GUESS);
     }
 
+    let waiting = store.backlog() > 0;
     STORE.set(Some(store));
-    arm();
+
+    // A timer does not survive an upgrade, so an outbox that did needs one.
+    // Nothing is waiting on a fresh install, and nothing is scheduled.
+    if waiting {
+        arm();
+    }
 }
 
 fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> Option<T> {

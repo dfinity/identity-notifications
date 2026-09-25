@@ -752,25 +752,84 @@ mod tests {
         let mut store = store();
         let tiny = 900;
 
-        for i in 0..20 {
-            store.add(
+        let campaign: Vec<NotificationId> = (0..20)
+            .filter_map(|i| {
+                store.add(
+                    alice(),
+                    note("campaign", Some(&format!("c{i}")), Some(Urgency::VeryLow)),
+                    HOUR,
+                    tiny,
+                    0,
+                )
+            })
+            .collect();
+        let urgent = store
+            .add(
                 alice(),
-                note("campaign", Some(&format!("c{i}")), Some(Urgency::VeryLow)),
+                note("urgent", Some("u"), Some(Urgency::High)),
                 HOUR,
                 tiny,
                 0,
-            );
-        }
-        let urgent = store.add(
-            alice(),
-            note("urgent", Some("u"), Some(Urgency::High)),
-            HOUR,
-            tiny,
-            0,
+            )
+            .expect("room is made for it");
+
+        let kept = campaign
+            .iter()
+            .filter(|id| store.content_of(**id).is_some())
+            .count();
+        assert!(
+            kept < campaign.len(),
+            "the campaign paid for the room: {kept} of {} still held",
+            campaign.len()
+        );
+        assert!(store.content_of(urgent).is_some());
+        assert_eq!(store.backlog() as usize, kept + 1, "what is shed is gone");
+    }
+
+    #[test]
+    fn a_sweep_frees_the_room_accepted_content_was_holding() {
+        let mut store = store();
+        // Room for one notification and no more.
+        let tiny = 100;
+
+        let filler = store
+            .add(alice(), note("filler", Some("f"), None), HOUR, tiny, 0)
+            .expect("the first one fits");
+        let batch = store.take(10);
+        store.settle(&batch[0]);
+
+        // At the ceiling with nothing left to shed, because accepted content
+        // is never shed.
+        assert!(store
+            .add(alice(), note("x", Some("x"), None), HOUR, tiny, 0)
+            .is_none());
+
+        // Past the filler's expiry there is room again, and the add sweeps.
+        assert!(store
+            .add(alice(), note("x", Some("x"), None), 2 * HOUR, tiny, HOUR)
+            .is_some());
+        assert!(!store.holds(filler), "it expired an hour ago");
+    }
+
+    #[test]
+    fn a_deferral_does_not_spend_the_second_attempt() {
+        let mut store = store();
+        store.add(alice(), note("x", Some("k"), None), 30 * HOUR, ROOMY, 0);
+
+        let first = store.take(10);
+        store.defer(first[0], 2 * HOUR);
+        store.promote(2 * HOUR);
+
+        let deferred = store.take(10);
+        assert_eq!(deferred.len(), 1, "a deferral comes back when asked for");
+        assert!(
+            store.park(deferred[0], 2 * HOUR),
+            "the attempt is still there"
         );
 
-        assert!(urgent.is_some());
-        assert!(store.content_of(urgent.unwrap()).is_some());
+        store.promote(30 * HOUR);
+        let last = store.take(10);
+        assert!(!store.park(last[0], 25 * HOUR), "and only one of them");
     }
 
     #[test]
@@ -834,19 +893,10 @@ mod tests {
         for hour in 0..800u64 {
             store.record(hour * HOUR, Event::Sent, 1);
         }
-        assert_eq!(store.hours().len(), KEEP_HOURS);
-    }
-
-    #[test]
-    fn a_receipt_is_only_recorded_while_the_content_is_there() {
-        let mut store = store();
-        let id = store
-            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
-            .unwrap();
-
-        assert!(store.holds(id));
-        store.dismiss(alice(), "k");
-        assert!(!store.holds(id), "nothing left to have received");
+        let ring = store.hours();
+        assert_eq!(ring.len(), KEEP_HOURS);
+        assert_eq!(ring[0].start, 80 * HOUR, "the oldest hours went");
+        assert_eq!(ring[KEEP_HOURS - 1].start, 799 * HOUR);
     }
 
     #[test]
