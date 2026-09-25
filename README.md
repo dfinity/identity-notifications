@@ -39,12 +39,11 @@ The `url` opens the conversation and the `key` names it, so the next message
 from that sender replaces the notification instead of stacking another beside
 it.
 
-The rest of the surface:
+Two more calls complete the surface:
 
 ```motoko
 notifications.dismiss(recipient, "chat-" # Principal.toText(sender));  // no longer needed
 notifications.metrics();                         // the pipeline, hour by hour
-notifications.resume<system>();                  // after an upgrade, see below
 ```
 
 Types come from their own module:
@@ -67,18 +66,10 @@ canisters:
 
 ## Upgrades
 
-The library's state is stable: the outbox, the content a channel may still
-pull, the hourly metrics and the learned batch limit all survive. Its timer
-does not, because no Motoko timer does, so an actor that may be upgraded with
-notifications still waiting calls `resume`:
-
-```motoko
-system func postupgrade() {
-  notifications.resume<system>()
-};
-```
-
-Without it a waiting outbox goes out with the next `send` instead.
+Nothing to do. The library's state is stable — the outbox, the content a
+channel may still pull, the hourly metrics and the learned batch limit — and
+the mixin arms its own flush again on the way back up, since no Motoko timer
+survives an upgrade.
 
 ## Development
 

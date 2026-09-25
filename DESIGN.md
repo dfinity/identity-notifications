@@ -216,9 +216,16 @@ on a push.
 
 The timer is one-shot and only ever armed by a send, or by a flush that left
 something behind. A canister with an empty outbox has no timer scheduled and
-costs nothing until the next `send`. What does not survive an upgrade is the
-timer, so an outbox that does is picked up again from the app's post-upgrade
-path.
+costs nothing until the next `send`.
+
+No timer survives an upgrade, so an outbox that does would sit there until the
+next send. The mixin arms one again from a statement at the end of its body,
+which the actor re-runs on every upgrade — measured on a local replica: a body
+statement runs again where a timer set before the upgrade never fires, and one
+armed during the upgrade does. Nothing is asked of the app, which is the point;
+a mixin cannot declare a `postupgrade` of its own, and the deprecated hook it
+would need belongs to the actor. Rust has the hook already: `init` is called
+from `post_upgrade`, and arms a flush when the outbox it reopens is not empty.
 
 Two seconds is chosen against how the IC executes, not against how long a user
 will wait. The floor is already a round: the timer callback is a message in the

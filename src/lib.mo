@@ -93,13 +93,6 @@ mixin<system>() {
       Outbox.dismiss(outbox, recipient, key)
     };
 
-    /// Picks up an outbox that outlived its timer. Call it from the actor's
-    /// `postupgrade`; a mixin cannot declare one itself, and Motoko timers do
-    /// not survive an upgrade.
-    public func resume<system>() {
-      if (Outbox.backlog(outbox) > 0) arm<system>()
-    };
-
     public func metrics() : Types.Metrics = {
       hours = Metrics.snapshot(pipeline);
       backlog = Outbox.backlog(outbox);
@@ -199,5 +192,9 @@ mixin<system>() {
 
     Flush.apply(outbox, pipeline, batch, outcome, now);
     if (Outbox.backlog(outbox) > 0) arm<system>()
-  }
+  };
+
+  // Runs on every install and every upgrade. A timer does not survive one, so
+  // an outbox that did is picked up here rather than waiting for a send.
+  if (Outbox.backlog(outbox) > 0) arm<system>()
 }
