@@ -2,8 +2,7 @@
 //! batch, makes the call, and hands the answer back here.
 
 use super::ii;
-use super::metrics::{Event, Pipeline};
-use super::outbox::{Entry, Outbox};
+use super::store::{Entry, Event, Store};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -38,14 +37,8 @@ pub fn arg(origin: &str, batch: &[Entry]) -> ii::SendNotificationArg {
 /// Applies an outcome to the batch that produced it. Entries not named in
 /// `not_accepted` were taken, so they leave the outbox — what remains of them
 /// is content a channel may pull.
-pub fn apply(
-    outbox: &mut Outbox,
-    pipeline: &mut Pipeline,
-    batch: Vec<Entry>,
-    outcome: Outcome,
-    now: u64,
-) {
-    pipeline.record(now, Event::Sent, batch.len() as u64);
+pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
+    store.record(now, Event::Sent, batch.len() as u64);
 
     match outcome {
         Outcome::Answered(not_accepted) => {
@@ -54,7 +47,7 @@ pub fn apply(
                 .map(|entry| (entry.id, entry.reason))
                 .collect();
 
-            pipeline.record(
+            store.record(
                 now,
                 Event::Accepted,
                 (batch.len() - not_accepted.len()) as u64,
@@ -62,16 +55,16 @@ pub fn apply(
 
             for entry in batch {
                 match refused.get(&entry.id) {
-                    None => outbox.settle(&entry),
+                    None => store.settle(&entry),
                     Some(ii::NotAcceptedReason::Deferred { retry_after }) => {
-                        pipeline.record(now, Event::Deferred, 1);
-                        outbox.defer(entry, *retry_after);
+                        store.record(now, Event::Deferred, 1);
+                        store.defer(entry, *retry_after);
                     }
                     // No such recipient, or no channel: the user fixes both,
                     // and has until the notification expires to do it.
                     Some(_) => {
-                        if !outbox.park(entry) {
-                            pipeline.record(now, Event::Dropped, 1);
+                        if !store.park(entry) {
+                            store.record(now, Event::Dropped, 1);
                         }
                     }
                 }
@@ -80,8 +73,8 @@ pub fn apply(
 
         Outcome::Unreachable => {
             for entry in batch {
-                if !outbox.park(entry) {
-                    pipeline.record(now, Event::Dropped, 1);
+                if !store.park(entry) {
+                    store.record(now, Event::Dropped, 1);
                 }
             }
         }
@@ -90,13 +83,13 @@ pub fn apply(
         // be sent again once the batch is split or the origin is fixed.
         Outcome::TooMany(_) | Outcome::NotAuthorized => {
             for entry in batch {
-                outbox.requeue(entry, now);
+                store.requeue(entry, now);
             }
         }
     }
 }
 
-fn urgency_of(lane: usize) -> ii::Urgency {
+fn urgency_of(lane: u8) -> ii::Urgency {
     match lane {
         0 => ii::Urgency::High,
         1 => ii::Urgency::Normal,

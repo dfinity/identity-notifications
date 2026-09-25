@@ -3,15 +3,16 @@
 //! `flush::apply`; everything worth checking is on this side of the await.
 
 use candid::Principal;
+use ic_stable_structures::memory_manager::MemoryManager;
+use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications::internal::flush::{self, Outcome};
 use identity_notifications::internal::ii;
-use identity_notifications::internal::metrics::Pipeline;
-use identity_notifications::internal::outbox::Outbox;
+use identity_notifications::internal::store::{Event, Store};
 use identity_notifications::{Notification, Urgency};
 use std::collections::HashMap;
 
 const HOUR: u64 = 3_600_000_000_000;
-const CAPACITY: usize = 1_073_741_824;
+const CAPACITY: u64 = 1_073_741_824;
 
 /// Whether Internet Identity knows a recipient, and whether they have a
 /// channel.
@@ -22,8 +23,7 @@ enum Known {
 }
 
 struct World {
-    outbox: Outbox,
-    pipeline: Pipeline,
+    store: Store,
     known: HashMap<Principal, Known>,
     room_per_flush: usize,
     batch_limit: usize,
@@ -36,9 +36,11 @@ struct Flushed {
 
 impl World {
     fn new(room_per_flush: usize) -> Self {
+        // Off-canister, `DefaultMemoryImpl` is a plain vector, so the stable
+        // maps run in a test without a replica.
+        let manager = Box::leak(Box::new(MemoryManager::init(DefaultMemoryImpl::default())));
         Self {
-            outbox: Outbox::default(),
-            pipeline: Pipeline::default(),
+            store: Store::new(manager, 0),
             known: HashMap::new(),
             room_per_flush,
             batch_limit: 1_000,
@@ -54,16 +56,16 @@ impl World {
     }
 
     fn send(&mut self, to: Principal, notification: Notification, now: u64) {
-        self.outbox
+        self.store
             .add(to, notification, now + 24 * HOUR, CAPACITY, now);
     }
 
     /// One flush: what Internet Identity would answer, applied the way the
     /// canister layer applies it.
     fn flush(&mut self, now: u64) -> Flushed {
-        self.outbox.promote(now);
-        let batch = self.outbox.take(self.batch_limit);
-        let (batch, _) = self.outbox.drop_expired(batch, now);
+        self.store.promote(now);
+        let batch = self.store.take(self.batch_limit);
+        let (batch, _) = self.store.drop_expired(batch, now);
         if batch.is_empty() {
             return Flushed {
                 sent: 0,
@@ -104,18 +106,12 @@ impl World {
             sent: batch.len(),
             accepted: batch.len() - not_accepted.len(),
         };
-        flush::apply(
-            &mut self.outbox,
-            &mut self.pipeline,
-            batch,
-            Outcome::Answered(not_accepted),
-            now,
-        );
+        flush::apply(&mut self.store, batch, Outcome::Answered(not_accepted), now);
         flushed
     }
 
     fn dropped(&self) -> u64 {
-        self.pipeline.snapshot().iter().map(|b| b.dropped).sum()
+        self.store.hours().iter().map(|bucket| bucket.dropped).sum()
     }
 }
 
@@ -142,7 +138,7 @@ fn a_small_group_of_active_people_is_one_call() {
 
     let flushed = world.flush(HOUR);
     assert_eq!((flushed.sent, flushed.accepted), (4, 4));
-    assert_eq!(world.outbox.backlog(), 0);
+    assert_eq!(world.store.backlog(), 0);
 }
 
 #[test]
@@ -189,8 +185,8 @@ fn a_campaign_and_the_chat_share_every_batch() {
         );
     }
 
-    world.outbox.promote(HOUR);
-    let batch = world.outbox.take(15);
+    world.store.promote(HOUR);
+    let batch = world.store.take(15);
     let urgent = batch.iter().filter(|entry| entry.lane == 0).count();
 
     // Weights are 8 : 4 : 2 : 1, so a fifteen-entry batch is mostly urgent —
@@ -209,13 +205,13 @@ fn deferral_is_not_refusal() {
     }
 
     assert_eq!(world.flush(HOUR).accepted, 2);
-    assert_eq!(world.outbox.backlog(), 3);
+    assert_eq!(world.store.backlog(), 3);
     assert_eq!(world.flush(HOUR + 60).sent, 0, "not due yet");
 
     world.room_per_flush = 10;
     let second = world.flush(2 * HOUR);
     assert_eq!((second.sent, second.accepted), (3, 3));
-    assert_eq!(world.outbox.backlog(), 0);
+    assert_eq!(world.store.backlog(), 0);
 }
 
 #[test]
@@ -228,11 +224,11 @@ fn a_second_refusal_drops_the_notification_and_its_content() {
     world.send(user(0), notification, HOUR);
 
     assert_eq!(world.flush(HOUR).accepted, 0);
-    assert_eq!(world.outbox.backlog(), 1);
+    assert_eq!(world.store.backlog(), 1);
 
     let second = world.flush(2 * HOUR - 1);
     assert_eq!((second.sent, second.accepted), (1, 0));
-    assert_eq!(world.outbox.backlog(), 0);
+    assert_eq!(world.store.backlog(), 0);
     assert_eq!(world.dropped(), 1);
 }
 
@@ -245,8 +241,8 @@ fn accepted_content_is_kept_until_it_expires() {
 
     let id = identity_notifications::internal::ids::keyed(user(0), "kept");
     assert_eq!(
-        world.outbox.content_of(id).map(|c| c.title.as_str()),
-        Some("New message")
+        world.store.content_of(id).map(|content| content.title),
+        Some("New message".to_string())
     );
 }
 
@@ -258,21 +254,15 @@ fn a_batch_refused_as_too_large_is_not_lost() {
         world.send(user(i), message(&format!("m-{i}"), None), HOUR);
     }
 
-    world.outbox.promote(HOUR);
-    let batch = world.outbox.take(10);
-    flush::apply(
-        &mut world.outbox,
-        &mut world.pipeline,
-        batch,
-        Outcome::TooMany(4),
-        HOUR,
-    );
-    assert_eq!(world.outbox.backlog(), 10);
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    flush::apply(&mut world.store, batch, Outcome::TooMany(4), HOUR);
+    assert_eq!(world.store.backlog(), 10);
 
     world.batch_limit = 4;
     let first = world.flush(HOUR);
     assert_eq!((first.sent, first.accepted), (4, 4));
-    assert_eq!(world.outbox.backlog(), 6);
+    assert_eq!(world.store.backlog(), 6);
 }
 
 #[test]
@@ -284,32 +274,35 @@ fn a_call_that_never_lands_keeps_the_notification() {
     notification.expires_at = Some(3 * HOUR);
     world.send(user(0), notification, HOUR);
 
-    world.outbox.promote(HOUR);
-    let batch = world.outbox.take(10);
-    flush::apply(
-        &mut world.outbox,
-        &mut world.pipeline,
-        batch,
-        Outcome::Unreachable,
-        HOUR,
-    );
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    flush::apply(&mut world.store, batch, Outcome::Unreachable, HOUR);
 
-    assert_eq!(world.outbox.backlog(), 1);
+    assert_eq!(world.store.backlog(), 1);
     assert_eq!(world.flush(HOUR + 60).sent, 0);
     assert_eq!(world.flush(3 * HOUR - 1).accepted, 1);
 }
 
 #[test]
-fn a_snapshot_survives_an_upgrade() {
-    let mut world = World::new(0);
-    world.reachable(user(0));
-    world.send(user(0), message("pending", None), HOUR);
-    world.flush(HOUR);
-
-    let snapshot = world.outbox.export();
-    let restored = Outbox::import(snapshot);
-
+fn an_upgrade_serialises_nothing_and_loses_nothing() {
+    let manager = Box::leak(Box::new(MemoryManager::init(DefaultMemoryImpl::default())));
     let id = identity_notifications::internal::ids::keyed(user(0), "pending");
-    assert!(restored.content_of(id).is_some(), "content survives");
-    assert_eq!(restored.backlog(), world.outbox.backlog());
+
+    {
+        let mut store = Store::new(manager, 0);
+        store.add(
+            user(0),
+            message("pending", None),
+            HOUR + 24 * HOUR,
+            CAPACITY,
+            HOUR,
+        );
+        store.record(HOUR, Event::Sent, 1);
+    }
+
+    // The same memories, a fresh handle: what a post_upgrade does.
+    let reopened = Store::new(manager, 0);
+    assert!(reopened.content_of(id).is_some(), "content survives");
+    assert_eq!(reopened.backlog(), 1, "the outbox survives");
+    assert_eq!(reopened.hours().len(), 1, "metrics survive");
 }

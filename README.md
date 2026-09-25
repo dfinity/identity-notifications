@@ -16,11 +16,28 @@ identity-notifications = "0.1"
 ```
 
 ```rust
+use ic_stable_structures::memory_manager::{MemoryManager, MemoryId};
+use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications as notifications;
 use identity_notifications::Notification;
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
+
+thread_local! {
+    static MEMORIES: RefCell<MemoryManager<DefaultMemoryImpl>> =
+        RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
+}
+
+// `notifications::MEMORIES` consecutive ids from here are the library's; keep
+// your own state out of them.
+const NOTIFICATIONS_BASE: u8 = 10;
+
+#[ic_cdk::init]
+#[ic_cdk::post_upgrade]
+fn init() {
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
+}
 
 #[ic_cdk::update]
 fn send_message(to: candid::Principal, text: String) {
@@ -37,12 +54,11 @@ fn send_message(to: candid::Principal, text: String) {
 }
 ```
 
-Three more calls, and that is the whole surface:
+Two more calls, and that is the whole surface:
 
 ```rust
 notifications::dismiss(recipient, "chat-alice"); // no longer needs attention
 notifications::metrics();                        // the pipeline, hour by hour
-notifications::snapshot();                       // carry it across an upgrade
 ```
 
 Two environment variables configure it, and nothing else:
@@ -59,25 +75,12 @@ canisters:
 
 ## Upgrades
 
-The library's state lives in the canister heap, so an app carries it across an
-upgrade with its own:
-
-```rust
-#[ic_cdk::pre_upgrade]
-fn pre_upgrade() {
-    ic_cdk::storage::stable_save((my_state(), notifications::snapshot())).unwrap();
-}
-
-#[ic_cdk::post_upgrade]
-fn post_upgrade() {
-    let (mine, snapshot) = ic_cdk::storage::stable_restore().unwrap();
-    restore_my_state(mine);
-    notifications::restore(snapshot);
-}
-```
-
-Skipping that loses pending notifications their content, so a channel would
-pull and find nothing.
+Nothing to do beyond calling `init` again. Everything the library keeps —
+the outbox, the content a channel may still pull, the hourly metrics, the
+learned batch limit — lives in the stable memories you handed it, so an upgrade
+neither serialises nor restores any of it. A canister holding a campaign's
+worth of pending notifications upgrades as fast as an idle one, and
+`pre_upgrade` has nothing to run out of instructions doing.
 
 ## What it does for you
 

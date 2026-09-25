@@ -10,5 +10,6 @@ crate-type = ["cdylib"]
 [dependencies]
 candid = "0.10"
 ic-cdk = "0.20"
+ic-stable-structures = "0.7"
 identity-notifications = { path = "../.." }
 serde = { version = "1", features = ["derive"] }

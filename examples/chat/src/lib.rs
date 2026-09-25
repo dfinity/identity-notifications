@@ -2,12 +2,22 @@
 //! one-to-one conversations and groups, and three calls into the library.
 
 use candid::{CandidType, Principal};
-use ic_cdk::{init, post_upgrade, pre_upgrade, query, update};
+use ic_cdk::{init, post_upgrade, query, update};
+use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
+use ic_stable_structures::storable::Bound;
+use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, Storable};
 use identity_notifications as notifications;
 use identity_notifications::{Metrics, Notification};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+
+type Memory = VirtualMemory<DefaultMemoryImpl>;
+
+/// The library takes `notifications::MEMORIES` consecutive ids from
+/// `NOTIFICATIONS_BASE`; this app keeps its conversations in the one before.
+const CHATS_MEMORY: MemoryId = MemoryId::new(0);
+const NOTIFICATIONS_BASE: u8 = 1;
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -25,8 +35,29 @@ struct Conversation {
     messages: Vec<Message>,
 }
 
+impl Storable for Conversation {
+    const BOUND: Bound = Bound::Unbounded;
+
+    fn to_bytes(&self) -> Cow<'_, [u8]> {
+        Cow::Owned(candid::encode_one(self).expect("candid encoding"))
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        candid::encode_one(&self).expect("candid encoding")
+    }
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
+        candid::decode_one(bytes.as_ref()).expect("candid decoding")
+    }
+}
+
 thread_local! {
-    static CHATS: RefCell<HashMap<String, Conversation>> = RefCell::default();
+    static MEMORIES: RefCell<MemoryManager<DefaultMemoryImpl>> =
+        RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
+
+    static CHATS: RefCell<StableBTreeMap<String, Conversation, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORIES.with_borrow(|manager| manager.get(CHATS_MEMORY))),
+    );
 }
 
 /// One-to-one conversations are named by their two members, so both sides
@@ -63,10 +94,15 @@ fn send_direct(to: Principal, text: String) {
     let id = direct_id(caller, to);
 
     CHATS.with_borrow_mut(|chats| {
-        chats.entry(id.clone()).or_insert_with(|| Conversation {
-            members: vec![caller, to],
-            messages: Vec::new(),
-        });
+        if !chats.contains_key(&id) {
+            chats.insert(
+                id.clone(),
+                Conversation {
+                    members: vec![caller, to],
+                    messages: Vec::new(),
+                },
+            );
+        }
     });
 
     post(&id, caller, text);
@@ -82,7 +118,7 @@ fn send_to_group(id: String, text: String) {
 /// updates that notification rather than adding another beside it.
 fn post(id: &str, from: Principal, text: String) {
     let members = CHATS.with_borrow_mut(|chats| {
-        let Some(conversation) = chats.get_mut(id) else {
+        let Some(mut conversation) = chats.get(&id.to_string()) else {
             return Vec::new();
         };
         conversation.messages.push(Message {
@@ -90,7 +126,9 @@ fn post(id: &str, from: Principal, text: String) {
             text: text.clone(),
             at: ic_cdk::api::time(),
         });
-        conversation.members.clone()
+        let members = conversation.members.clone();
+        chats.insert(id.to_string(), conversation);
+        members
     });
 
     for member in members.into_iter().filter(|member| *member != from) {
@@ -113,8 +151,7 @@ fn mark_read(id: String, up_to: u64) {
     let newest = CHATS.with_borrow(|chats| {
         chats
             .get(&id)
-            .and_then(|conversation| conversation.messages.last())
-            .map(|message| message.at)
+            .and_then(|conversation| conversation.messages.last().map(|message| message.at))
     });
 
     if newest.is_some_and(|newest| up_to >= newest) {
@@ -127,7 +164,7 @@ fn messages(id: String) -> Vec<Message> {
     CHATS.with_borrow(|chats| {
         chats
             .get(&id)
-            .map(|conversation| conversation.messages.clone())
+            .map(|conversation| conversation.messages)
             .unwrap_or_default()
     })
 }
@@ -148,31 +185,16 @@ fn title(id: &str, from: Principal) -> String {
 }
 
 #[init]
-fn init() {}
-
-/// The app's own state and the library's, saved together. Skipping the
-/// library's half would leave pending notifications without content, so a
-/// channel would pull and find nothing.
-type Saved = (Vec<(String, Conversation)>, notifications::Snapshot);
-
-#[pre_upgrade]
-fn pre_upgrade() {
-    let chats = CHATS.with_borrow(|chats| {
-        chats
-            .iter()
-            .map(|(id, conversation)| (id.clone(), conversation.clone()))
-            .collect::<Vec<_>>()
-    });
-    ic_cdk::storage::stable_save((chats, notifications::snapshot()))
-        .expect("stable_save should fit");
+fn init() {
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
 }
 
+/// Nothing to save and nothing to restore: both this app's conversations and
+/// the library's state are already in stable memory. All an upgrade needs is
+/// the handle back.
 #[post_upgrade]
 fn post_upgrade() {
-    if let Ok((chats, snapshot)) = ic_cdk::storage::stable_restore::<Saved>() {
-        CHATS.with_borrow_mut(|store| store.extend(chats));
-        notifications::restore(snapshot);
-    }
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
 }
 
 ic_cdk::export_candid!();

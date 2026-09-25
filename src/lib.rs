@@ -29,12 +29,12 @@ pub mod internal;
 pub mod types;
 
 use candid::Principal;
+use ic_stable_structures::memory_manager::MemoryManager;
+use ic_stable_structures::DefaultMemoryImpl;
 use internal::config::{self, Config};
 use internal::flush::{self, Outcome};
 use internal::ii;
-use internal::metrics::{Event, Pipeline};
-pub use internal::outbox::Snapshot;
-use internal::outbox::{Entry, Outbox};
+use internal::store::{Entry, Event, Store};
 use std::cell::RefCell;
 use std::time::Duration;
 pub use types::{
@@ -55,21 +55,47 @@ const BATCH_GUESS: usize = 1_000;
 
 const DEFAULT_RETENTION: u64 = 86_400_000_000_000;
 
-#[derive(Default)]
-struct State {
-    outbox: Outbox,
-    pipeline: Pipeline,
-    batch_limit: usize,
-    misconfigured: Option<MisconfiguredSince>,
-    flush_armed: bool,
-    flushing: bool,
+thread_local! {
+    /// Everything durable lives in stable memory; what is here is the handle
+    /// to it, plus two flags that only matter within one execution round.
+    static STORE: RefCell<Option<Store>> = const { RefCell::new(None) };
+    static FLUSH_ARMED: RefCell<bool> = const { RefCell::new(false) };
+    static FLUSHING: RefCell<bool> = const { RefCell::new(false) };
 }
 
-thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State {
-        batch_limit: BATCH_GUESS,
-        ..State::default()
-    });
+/// Hands the library the stable memories it keeps everything in: `MEMORIES`
+/// consecutive ids starting at `base`, which the app reserves and nothing else
+/// may use.
+///
+/// Call it from `#[init]` **and** `#[post_upgrade]`. Nothing is serialised on
+/// upgrade and nothing is restored: the maps are already where they were.
+///
+/// ```ignore
+/// thread_local! {
+///     static MEMORIES: RefCell<MemoryManager<DefaultMemoryImpl>> =
+///         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
+/// }
+///
+/// #[ic_cdk::init]
+/// fn init() {
+///     MEMORIES.with_borrow(|manager| notifications::init(manager, 10));
+/// }
+/// ```
+pub fn init(manager: &MemoryManager<DefaultMemoryImpl>, base: u8) {
+    let mut store = Store::new(manager, base);
+    if store.batch_limit() <= 1 {
+        store.set_batch_limit(BATCH_GUESS);
+    }
+
+    STORE.set(Some(store));
+    arm();
+}
+
+/// How many consecutive `MemoryId`s [`init`] takes.
+pub const MEMORIES: u8 = internal::store::MEMORIES;
+
+fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> Option<T> {
+    STORE.with_borrow_mut(|store| store.as_mut().map(f))
 }
 
 /// Sends a notification, or updates the one this recipient's `key` already
@@ -86,40 +112,48 @@ pub fn send(recipient: Principal, notification: Notification) {
         Ok(config) => config,
         Err(why) => {
             note(why, now);
-            STATE.with_borrow_mut(|state| state.pipeline.record(now, Event::Dropped, 1));
+            with_store(|store| store.record(now, Event::Dropped, 1));
             return;
         }
     };
 
-    let added = STATE.with_borrow_mut(|state| {
-        state.outbox.add(
+    let added = with_store(|store| {
+        store.add(
             recipient,
             notification,
             now + DEFAULT_RETENTION,
-            config.capacity_bytes,
+            config.capacity_bytes as u64,
             now,
         )
     });
 
     match added {
-        Some(_) => arm(),
-        None => STATE.with_borrow_mut(|state| state.pipeline.record(now, Event::Dropped, 1)),
+        Some(Some(_)) => arm(),
+        // Refused by the ceiling, or `init` was never called.
+        Some(None) | None => {
+            with_store(|store| store.record(now, Event::Dropped, 1));
+        }
     }
 }
 
 /// This notification no longer needs anyone's attention. Its content goes, so
 /// a pull finds nothing and a channel that sweeps can close it.
 pub fn dismiss(recipient: Principal, key: &str) {
-    STATE.with_borrow_mut(|state| state.outbox.dismiss(recipient, key));
+    with_store(|store| store.dismiss(recipient, key));
 }
 
 /// The delivery pipeline, hour by hour, for whatever the app already uses to
 /// watch itself.
 pub fn metrics() -> Metrics {
-    STATE.with_borrow(|state| Metrics {
-        hours: state.pipeline.snapshot(),
-        backlog: state.outbox.backlog() as u64,
-        misconfigured: state.misconfigured,
+    with_store(|store| Metrics {
+        hours: store.hours(),
+        backlog: store.backlog(),
+        misconfigured: store.misconfigured(),
+    })
+    .unwrap_or(Metrics {
+        hours: Vec::new(),
+        backlog: 0,
+        misconfigured: None,
     })
 }
 
@@ -127,7 +161,7 @@ pub fn metrics() -> Metrics {
 /// [`endpoints!`] generates, or from your own if you would rather name it.
 pub fn notification_content(id: NotificationId) -> Option<Content> {
     sender_info()?;
-    STATE.with_borrow(|state| state.outbox.content_of(id).cloned())
+    with_store(|store| store.content_of(id)).flatten()
 }
 
 /// Records Internet Identity's receipt. Content stays until it expires: other
@@ -137,9 +171,10 @@ pub fn notification_received(id: NotificationId) {
         return;
     }
     let now = ic_cdk::api::time();
-    STATE.with_borrow_mut(|state| {
-        state.outbox.mark_received(id);
-        state.pipeline.record(now, Event::Received, 1);
+    with_store(|store| {
+        if store.mark_received(id) {
+            store.record(now, Event::Received, 1);
+        }
     });
 }
 
@@ -170,39 +205,12 @@ macro_rules! endpoints {
     };
 }
 
-/// Everything the library holds, for an app to carry across an upgrade in its
-/// own `pre_upgrade`/`post_upgrade`.
-pub fn snapshot() -> Snapshot {
-    STATE.with_borrow(|state| Snapshot {
-        outbox: state.outbox.export(),
-        pipeline: state.pipeline.clone(),
-        batch_limit: state.batch_limit,
-        misconfigured: state.misconfigured,
-    })
-}
-
-/// Restores a [`snapshot`]. Anything not restored simply starts empty, which
-/// costs pending notifications their content, so do restore it.
-pub fn restore(snapshot: Snapshot) {
-    STATE.with_borrow_mut(|state| {
-        state.outbox = Outbox::import(snapshot.outbox);
-        state.pipeline = snapshot.pipeline;
-        state.batch_limit = snapshot.batch_limit;
-        state.misconfigured = snapshot.misconfigured;
-    });
-    arm();
-}
-
 fn configured() -> Result<Config, Misconfigured> {
     config::read()
 }
 
 fn note(why: Misconfigured, now: u64) {
-    STATE.with_borrow_mut(|state| {
-        if state.misconfigured.map(|m| m.why) != Some(why) {
-            state.misconfigured = Some(MisconfiguredSince { why, since: now });
-        }
-    });
+    with_store(|store| store.note(why, now));
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
@@ -218,11 +226,11 @@ fn sender_info() -> Option<SenderInfo> {
 }
 
 fn arm() {
-    let arm = STATE.with_borrow_mut(|state| {
-        if state.flush_armed || state.flushing {
+    let arm = FLUSH_ARMED.with_borrow_mut(|armed| {
+        if *armed || FLUSHING.with_borrow(|flushing| *flushing) {
             return false;
         }
-        state.flush_armed = true;
+        *armed = true;
         true
     });
 
@@ -232,7 +240,7 @@ fn arm() {
 }
 
 async fn flush_once() {
-    STATE.with_borrow_mut(|state| state.flush_armed = false);
+    FLUSH_ARMED.set(false);
 
     let config = match configured() {
         Ok(config) => config,
@@ -242,42 +250,41 @@ async fn flush_once() {
         }
     };
 
-    if !STATE.with_borrow(|state| state.outbox.is_seeded()) {
+    if with_store(|store| store.is_seeded()) == Some(false) {
         seed_ids().await;
     }
 
     let now = ic_cdk::api::time();
-    let batch = STATE.with_borrow_mut(|state| {
-        state.outbox.promote(now);
-        let batch = state.outbox.take(state.batch_limit);
-        let (live, expired) = state.outbox.drop_expired(batch, now);
+    let batch = with_store(|store| {
+        store.promote(now);
+        let batch = store.take(store.batch_limit());
+        let (live, expired) = store.drop_expired(batch, now);
         if expired > 0 {
-            state.pipeline.record(now, Event::Dropped, expired as u64);
+            store.record(now, Event::Dropped, expired as u64);
         }
         live
-    });
+    })
+    .unwrap_or_default();
 
     if batch.is_empty() {
         return;
     }
 
-    STATE.with_borrow_mut(|state| state.flushing = true);
+    FLUSHING.set(true);
     let outcome = send_batch(&config, &batch).await;
-    STATE.with_borrow_mut(|state| state.flushing = false);
+    FLUSHING.set(false);
 
     match &outcome {
         Outcome::TooMany(limit) => {
-            STATE.with_borrow_mut(|state| state.batch_limit = (*limit).max(1));
+            with_store(|store| store.set_batch_limit((*limit).max(1)));
         }
         Outcome::NotAuthorized => note(Misconfigured::NotAuthorizedSender, now),
         _ => {}
     }
 
-    STATE.with_borrow_mut(|state| {
-        flush::apply(&mut state.outbox, &mut state.pipeline, batch, outcome, now);
-    });
+    with_store(|store| flush::apply(store, batch, outcome, now));
 
-    if STATE.with_borrow(|state| state.outbox.backlog() > 0) {
+    if with_store(|store| store.backlog() > 0) == Some(true) {
         arm();
     }
 }
@@ -313,6 +320,6 @@ async fn seed_ids() {
         ic_cdk::call::Call::unbounded_wait(Principal::management_canister(), "raw_rand").await;
 
     if let Ok(Ok(bytes)) = reply.map(|reply| reply.candid::<Vec<u8>>()) {
-        STATE.with_borrow_mut(|state| state.outbox.seed(&bytes));
+        with_store(|store| store.seed(&bytes));
     }
 }

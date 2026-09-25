@@ -992,6 +992,19 @@ lands. `ic-cdk` exposes `msg_caller_info_signer` and `msg_caller_info_data`
 with no such gate, and the replica serves caller info to every query flavour,
 so here it is a `#[query]` from the start.
 
+**State lives in stable memory, not the heap.** Motoko persists its heap, so
+the library's variables simply survive an upgrade. Rust has no such thing, and
+serialising in `pre_upgrade` is the wrong answer at this design's scale — a
+campaign's pending content would have to be written out inside one message's
+instruction budget. So the library keeps everything in `ic-stable-structures`
+maps over memories the app hands it, and `init` is called again after an
+upgrade rather than anything being restored.
+
+That also replaces the lane heaps with ordered keys: `(lane, expires_at, id)`
+sorts a lane by expiry, so taking a batch is a range scan and the ordering
+survives an upgrade because it was never stored. Parked entries sort by
+`(due_at, id)`, so promoting what is due is a scan from the start of that map.
+
 **The endpoints come from a macro.** `endpoints!()` expands to the two
 `#[ic_cdk::query]` / `#[ic_cdk::update]` functions Internet Identity calls,
 which is as close as Rust gets to a mixin injecting members.

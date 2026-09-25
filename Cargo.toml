@@ -13,6 +13,7 @@ categories = ["api-bindings", "wasm"]
 candid = "0.10"
 ic-cdk = "0.20"
 ic-cdk-timers = "1.0"
+ic-stable-structures = "0.7"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 
