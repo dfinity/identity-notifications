@@ -495,16 +495,24 @@ public shared func _internet_identity_notification_content(id : Nat64) : async ?
 public shared func _internet_identity_notification_received(id : Nat64) : async ()
 ```
 
-Both are updates, and the first is not by choice. Motoko cannot read caller info
-from a query at all — the primitive requires the `system` capability, which a
-query does not have — so a query could not tell who was asking. Returning
-content to anyone who knew an id is not an option, since ids are derived from
-keys and keys can be guessable, so the pull costs a round of consensus.
+Both are updates, and the first is temporary. The content pull wants to be a
+query, and the protocol allows it: the replica serves caller info to
+`ReplicatedQuery`, `NonReplicatedQuery` and `CompositeQuery`, refusing it only
+in `Start`, `Init`, `PreUpgrade` and `SystemTask`
+(`rs/embedders/src/wasmtime_embedder/system_api.rs`).
 
-What that buys back is certainty: the content a channel renders went through
-consensus rather than being one replica's word, which was listed as an accepted
-risk while this was a query. What it costs is latency on the path where someone
-is looking at a notification waiting for its text.
+Motoko is what blocks it. Its prelude declares the two primitives with
+`<system>`, a capability query bodies never carry, so a query cannot establish
+who is asking — and returning content to anyone who knew an id is not an option,
+since ids are derived from keys and keys can be guessable. A `moc` patched to
+drop that annotation compiles this method as a query and emits the right system
+calls, so the fix is the annotation and nothing else; the annotation is in fact
+backwards, since the contexts where Motoko does grant `system` are exactly the
+ones the replica refuses.
+
+Until that lands the pull costs a round of consensus, which at least buys
+certainty: the content a channel renders went through consensus rather than
+being one replica's word, which was an accepted risk while this was a query.
 
 The second records that the notification was delivered and returns nothing —
 delivery happens after the content has been fetched and shown, so a call that
@@ -950,11 +958,14 @@ any.
    detect a format, and the domain prefix already prevents a blob minted for one
    flow being accepted by the other. The library decodes the blob directly.
 
-2. **Query or update — decided by the language.** This was to be a query, with
-   uncertified content accepted knowingly. Implementation settled it: Motoko
-   cannot read caller info from a query, so a query cannot establish who is
-   asking, and the content pull is an update. The exposure disappears and a
-   round of consensus appears in its place.
+2. **Query or update — blocked by the language, not the protocol.** This was to
+   be a query, with uncertified content accepted knowingly. It is an update
+   because Motoko gates caller info behind `<system>`, which queries do not
+   have; the replica itself serves caller info to every query flavour. Verified
+   both ways: the replica's `sender_info` allows `ReplicatedQuery`,
+   `NonReplicatedQuery` and `CompositeQuery`, and a `moc` with the annotation
+   removed compiles the query form. It goes back to a query when Motoko is
+   fixed.
 3. **Method names — internal.** `_internet_identity_notification_content` and
    `_internet_identity_notification_received` are called by II's worker and
    implemented by II's library, so both sides have the same owner and change
