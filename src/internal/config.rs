@@ -1,0 +1,78 @@
+//! Two environment variables and a default, read once: a canister's
+//! environment does not change under it.
+
+use crate::types::Misconfigured;
+use candid::Principal;
+
+pub const DEFAULT_CAPACITY_MB: usize = 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Config {
+    pub internet_identity: Principal,
+    pub origin: String,
+    pub capacity_bytes: usize,
+}
+
+/// Missing configuration is a deployment mistake rather than something an app
+/// can handle, so it is reported rather than guessed at.
+#[cfg(target_arch = "wasm32")]
+pub fn read() -> Result<Config, Misconfigured> {
+    use ic_cdk::api::{env_var_name_exists, env_var_value};
+
+    let origin = if env_var_name_exists("notification_origin") {
+        env_var_value("notification_origin")
+    } else {
+        return Err(Misconfigured::Origin);
+    };
+    if origin.is_empty() {
+        return Err(Misconfigured::Origin);
+    }
+
+    if !env_var_name_exists("internet_identity") {
+        return Err(Misconfigured::InternetIdentity);
+    }
+    let internet_identity = Principal::from_text(env_var_value("internet_identity"))
+        .map_err(|_| Misconfigured::InternetIdentity)?;
+
+    let capacity_mb = if env_var_name_exists("notification_capacity_mb") {
+        env_var_value("notification_capacity_mb")
+            .parse()
+            .unwrap_or(DEFAULT_CAPACITY_MB)
+    } else {
+        DEFAULT_CAPACITY_MB
+    };
+
+    Ok(Config {
+        internet_identity,
+        origin,
+        capacity_bytes: capacity_mb * 1_048_576,
+    })
+}
+
+/// Off-canister there is no environment to read, so a host build reports the
+/// same thing a canister with no configuration would.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read() -> Result<Config, Misconfigured> {
+    Err(Misconfigured::Origin)
+}
+
+impl Config {
+    pub fn capacity_from_mb(mb: usize) -> usize {
+        mb * 1_048_576
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gigabyte_is_the_default_ceiling() {
+        assert_eq!(Config::capacity_from_mb(DEFAULT_CAPACITY_MB), 1_073_741_824);
+    }
+
+    #[test]
+    fn a_host_build_reports_missing_configuration() {
+        assert_eq!(read(), Err(Misconfigured::Origin));
+    }
+}
