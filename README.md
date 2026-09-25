@@ -101,19 +101,11 @@ neither serialises nor restores any of it. A canister holding a campaign's
 worth of pending notifications upgrades as fast as an idle one, and
 `pre_upgrade` has nothing to run out of instructions doing.
 
-## What it does for you
-
-Coalesces two seconds of sends into one call, and skips the wait for
-`Urgency::High`. Drains four lanes by urgency in weighted cycles, so a
-million-recipient campaign cannot starve a chat and the chat cannot starve the
-campaign. Learns Internet Identity's batch limit from its refusal rather than
-hardcoding one. Parks a refused notification until just before it expires and
-tries once more, which gives the user the whole window to sign in or turn
-notifications on. Keeps a month of hourly delivery buckets. Sheds the outbox
-rather than anything Internet Identity has already accepted, because a pull has
-to find content.
-
 ## Development
+
+```
+cargo test
+```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). `examples/chat` is a chat canister with
 one-to-one and group conversations, built as part of CI.
