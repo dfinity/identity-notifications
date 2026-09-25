@@ -208,7 +208,7 @@ fn open_notifications() {
                 parked: MemoryId::new(2),
                 content: MemoryId::new(3),
                 metrics: MemoryId::new(4),
-                counters: MemoryId::new(5),
+                bookkeeping: MemoryId::new(5),
             },
         )
     });

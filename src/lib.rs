@@ -97,7 +97,7 @@ thread_local! {
 ///                 parked: MemoryId::new(11),
 ///                 content: MemoryId::new(12),
 ///                 metrics: MemoryId::new(13),
-///                 counters: MemoryId::new(14),
+///                 bookkeeping: MemoryId::new(14),
 ///             },
 ///         )
 ///     });

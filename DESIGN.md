@@ -1001,7 +1001,7 @@ maps over memories the app hands it, and `init` is called again after an
 upgrade rather than anything being restored.
 
 The app names each memory in a struct — `outbox`, `parked`, `content`,
-`metrics`, `counters` — rather than passing a base id or a count. A base hid
+`metrics`, `bookkeeping` — rather than passing a base id or a count. A base hid
 what the library was taking, and a count answered "how many" without answering
 "which". Named fields answer both at the call site, and a version that needs
 another memory adds a field, which stops an app compiling rather than quietly

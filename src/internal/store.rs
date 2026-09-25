@@ -22,7 +22,15 @@ use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// The stable memories the library keeps its state in. The app says which id
+/// The stable memories the library keeps its state in.
+///
+/// `content` is separate from the two entry maps because its values are up to
+/// 8KB while an entry is 64 bytes, and a `StableBTreeMap` sizes its nodes from
+/// the value bound — one map would make every entry carry the larger one.
+/// `outbox` and `parked` are separate because they are ordered differently,
+/// by `(lane, expires_at, id)` and by `(due_at, id)`; they could share a map
+/// behind a discriminant byte, which would save one id out of 255 and cost a
+/// subtler encoding. The app says which id
 /// each one gets, so what it is giving up is written at the call site — and a
 /// version that needs another memory adds a field here, which stops the app
 /// compiling instead of quietly taking an id it was already using.
@@ -36,8 +44,11 @@ pub struct Memories {
     pub content: MemoryId,
     /// An hour of the delivery pipeline per entry, thirty days deep.
     pub metrics: MemoryId,
-    /// Counters: the id seed, the learned batch limit, bytes held.
-    pub counters: MemoryId,
+    /// Everything small that is not a collection: the id seed and counter,
+    /// the bytes held against the capacity ceiling, the batch limit learned
+    /// from Internet Identity, and any misconfiguration with the time it
+    /// started.
+    pub bookkeeping: MemoryId,
 }
 
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
@@ -180,7 +191,7 @@ impl Store {
             parked: BTreeMap::init(manager.get(memories.parked)),
             content: BTreeMap::init(manager.get(memories.content)),
             hours: BTreeMap::init(manager.get(memories.metrics)),
-            meta: Cell::init(manager.get(memories.counters), Meta::default()),
+            meta: Cell::init(manager.get(memories.bookkeeping), Meta::default()),
         }
     }
 
@@ -516,7 +527,7 @@ mod tests {
         parked: MemoryId::new(1),
         content: MemoryId::new(2),
         metrics: MemoryId::new(3),
-        counters: MemoryId::new(4),
+        bookkeeping: MemoryId::new(4),
     };
 
     /// Off-canister, `DefaultMemoryImpl` is a plain vector, so the whole store

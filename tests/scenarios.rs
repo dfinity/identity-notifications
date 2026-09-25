@@ -17,7 +17,7 @@ const MEMORY_IDS: Memories = Memories {
     parked: MemoryId::new(1),
     content: MemoryId::new(2),
     metrics: MemoryId::new(3),
-    counters: MemoryId::new(4),
+    bookkeeping: MemoryId::new(4),
 };
 const CAPACITY: u64 = 1_073_741_824;
 
