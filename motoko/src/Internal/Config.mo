@@ -11,7 +11,9 @@ module {
   let DEFAULT_CAPACITY_MB : Nat = 1024;
 
   public type Config = {
-    sender : Principal;
+    /// `null` where the variable is unset, which `setSender` can still answer
+    /// for.
+    sender : ?Principal;
     origin : Text;
     capacityBytes : Nat
   };
@@ -21,10 +23,11 @@ module {
     let ?origin = Runtime.envVar<system>("notification_origin") else return #err(#origin);
     if (Text.size(origin) == 0) return #err(#origin);
 
-    let ?identity = Runtime.envVar<system>("notification_sender") else return #err(#sender);
-
     #ok {
-      sender = Principal.fromText(identity);
+      sender = switch (Runtime.envVar<system>("notification_sender")) {
+        case (?identity) ?Principal.fromText(identity);
+        case null null
+      };
       origin;
       capacityBytes = megabytes<system>() * 1_048_576
     }

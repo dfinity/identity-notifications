@@ -57,6 +57,7 @@ mixin<system>() {
   /// came back believing one was armed would never arm another.
   transient var flushArmed : Bool = false;
   transient var flushing : Bool = false;
+  transient var senderOverride : ?Principal = null;
 
   transient let notifications = object {
 
@@ -71,6 +72,11 @@ mixin<system>() {
         };
         case (#ok(config)) {
           let now = Time.now();
+          if (sender(config) == null) {
+            note(#sender);
+            Metrics.record(pipeline, now, #dropped, 1);
+            return
+          };
           let added = Outbox.add(
             outbox,
             recipient,
@@ -85,6 +91,14 @@ mixin<system>() {
           }
         }
       }
+    };
+
+    /// Sends through this canister, and trusts it on a pull, in place of the
+    /// `notification_sender` variable; `null` goes back to the variable. For a
+    /// test canister retargeting Internet Identity at runtime, and not
+    /// remembered across an upgrade.
+    public func setSender(sender : ?Principal) {
+      senderOverride := sender
     };
 
     /// This notification no longer needs anyone's attention. Its content goes,
@@ -126,9 +140,17 @@ mixin<system>() {
   /// origin. Anything else is not ours to answer.
   func senderInfo<system>() : ?CallerInfo.SenderInfo {
     let #ok(config) = configured else return null;
-    let ?info = CallerInfo.read<system>(config.sender) else return null;
+    let ?signer = sender(config) else return null;
+    let ?info = CallerInfo.read<system>(signer) else return null;
     if (info.origin != config.origin) return null;
     ?info
+  };
+
+  /// Who this canister sends through, and whose caller info it trusts: what
+  /// `setSender` was given, or the configured variable.
+  func sender(config : Config.Config) : ?Principal = switch senderOverride {
+    case (?override_) ?override_;
+    case null config.sender
   };
 
   func note(why : Types.Misconfigured) {
@@ -156,6 +178,7 @@ mixin<system>() {
       case (#err(why)) { note(why); return };
       case (#ok(c)) c
     };
+    let ?signer = sender(config) else { note(#sender); return };
 
     if (not seeded) {
       seeded := true;
@@ -173,7 +196,7 @@ mixin<system>() {
 
     flushing := true;
     let outcome = try {
-      switch (await II.service(config.sender).app_send_notification(Flush.arg(config.origin, batch))) {
+      switch (await II.service(signer).app_send_notification(Flush.arg(config.origin, batch))) {
         case (#Ok(response)) #answered(response.not_accepted);
         case (#Err(#TooManyNotifications { limit })) #tooMany(Nat64.toNat(Nat64.fromNat32(limit)));
         case (#Err(#NoSuchSender)) #notAuthorized;
