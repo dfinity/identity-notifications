@@ -206,7 +206,12 @@ user's order update would silently overwrite another notification of theirs.
 ## Sending
 
 `send` appends to the outbox and, if no flush is pending, arms one two
-seconds out. Everything that arrives in the meantime rides along.
+seconds out. Everything that arrives in the meantime rides along, urgency
+included: urgency decides which lane drains first, not whether a call happens
+now. An earlier draft let `#High` skip the window, which undoes the batching
+exactly where it matters — an app that marks everything urgent would make one
+call per notification — and two seconds is not what "urgent" means to someone
+waiting on a push.
 
 Two seconds is chosen against how the IC executes, not against how long a user
 will wait. The floor is already a round: the timer callback is a message in the
@@ -221,12 +226,10 @@ It also self-throttles. The flush competes with app messages in the same queue,
 so under load it lands late, the batch grows, and the call rate falls exactly
 when the canister is busiest. Load cannot increase the rate of calls at II.
 
-Three things cut the wait short or hold it open:
+Two things cut the wait short or hold it open:
 
 - **A full batch flushes immediately.** A fan-out that fills the batch limit
   does not sit waiting for the window.
-- **`urgency = #High` flushes immediately.** An app that says something is
-  urgent should not have it held for two seconds by a library.
 - **One flush is in flight at a time.** The next window is armed when the
   current call returns, so a slow or deferring II slows the library down
   instead of multiplying calls against it.
