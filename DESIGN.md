@@ -140,12 +140,13 @@ whose body never loads, and Internet Identity would still be holding the entry.
 
 ```yaml
 environment_variables:
-  internet_identity:   "rdmx6-jaaaa-aaaaa-aaadq-cai"    # required
+  notification_sender: "rdmx6-jaaaa-aaaaa-aaadq-cai"    # Internet Identity, required
   notification_origin: "https://your-app.icp0.io"       # required
 ```
 
-`internet_identity` is the principal whose pulls the canister answers. It has to
-be configuration rather than a constant because the local replica, staging and
+`notification_sender` is Internet Identity's canister id: the principal whose
+pulls this canister answers, and the one it sends through. It has to be
+configuration rather than a constant because the local replica, staging and
 mainnet all have different ones.
 
 `notification_origin` is the one origin this canister notifies for, and it is
@@ -552,12 +553,12 @@ let info   = Prim.callerInfoData<system>();     // II's sender_info blob
 ```
 
 So both methods: read the signer, deny unless it equals the configured
-`internet_identity` principal, decode the sender info, check the origin in it is
-ours, and answer for `(account, id)`.
+`notification_sender` principal, decode the sender info, check the origin in
+it is ours, and answer for `(account, id)`.
 
 Denial is `null`, not a trap. A trap on an untrusted signer tells that caller
 nothing it did not already know and turns a routine deny into a failed call; a
-missing `internet_identity` variable does trap, because that is a deployment
+missing `notification_sender` variable does trap, because that is a deployment
 error the operator has to see.
 
 The caller principal is ignored entirely. It carries no authority; the account
@@ -814,7 +815,7 @@ Very little, and none of it about delivery:
 not fail to send because notifications are misconfigured, so every failure is
 absorbed by the library and visible afterwards in `metrics`.
 
-That includes configuration. If `internet_identity` or `notification_origin` is
+That includes configuration. If `notification_sender` or `notification_origin` is
 missing, the first `send` records it in `metrics().misconfigured`, logs it, and
 drops the notification — it does not trap the way the pull path does, because
 there the caller is II and a loud failure is the right answer.

@@ -29,7 +29,7 @@
 //! }
 //! ```
 //!
-//! Configured by environment variables — `internet_identity`,
+//! Configured by environment variables — `notification_sender`,
 //! `notification_origin`, and optionally `notification_capacity_mb` — so
 //! nothing about a deployment is compiled in.
 
@@ -226,7 +226,7 @@ fn note(why: Misconfigured, now: u64) {
 /// origin. Anything else is not ours to answer.
 fn sender_info() -> Option<SenderInfo> {
     let config = configured().ok()?;
-    if msg_caller_info_signer()? != config.internet_identity {
+    if msg_caller_info_signer()? != config.sender {
         return None;
     }
 
@@ -301,7 +301,7 @@ async fn flush_once() {
 async fn send_batch(config: &Config, batch: &[Entry]) -> Outcome {
     let arg = flush::arg(&config.origin, batch);
 
-    let response = Call::unbounded_wait(config.internet_identity, "app_send_notification")
+    let response = Call::unbounded_wait(config.sender, "app_send_notification")
         .with_arg(&arg)
         .await;
 

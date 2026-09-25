@@ -36,10 +36,6 @@ thread_local! {
 #[init]
 #[post_upgrade]
 fn init() {
-    // Which memory each part of the library gets. Named rather than counted,
-    // so what you are handing over is right here — and a version that needs
-    // another memory adds a field, which stops this compiling instead of
-    // quietly taking an id you were already using.
     MEMORIES.with_borrow(|manager| {
         notifications::init(
             manager,
@@ -62,10 +58,7 @@ fn send_message(to: Principal, text: String) {
         Notification {
             title: "New message".into(),
             body: text,
-            // The conversation they will land in, on your own origin.
             url: Some(format!("https://chat.example.com/chats/{from}")),
-            // The same conversation, named: the next message from `from`
-            // updates this notification instead of stacking another beside it.
             key: Some(format!("chat-{from}")),
             ..Default::default()
         },
@@ -73,7 +66,10 @@ fn send_message(to: Principal, text: String) {
 }
 ```
 
-Two more calls, and that is the whole app-facing surface:
+The `url` opens the conversation and the `key` names it, so the next message
+from `from` replaces that notification instead of stacking another beside it.
+
+Two more calls complete the surface:
 
 ```rust
 notifications::dismiss(recipient, &format!("chat-{from}")); // no longer needs attention
@@ -87,19 +83,17 @@ canisters:
   - name: backend
     settings:
       environment_variables:
-        internet_identity:        "rdmx6-jaaaa-aaaaa-aaadq-cai"
+        notification_sender:      "rdmx6-jaaaa-aaaaa-aaadq-cai"   # Internet Identity
         notification_origin:      "https://your-app.icp0.io"
         notification_capacity_mb: "1024"   # optional
 ```
 
 ## Upgrades
 
-Nothing to do beyond calling `init` again. Everything the library keeps —
-the outbox, the content a channel may still pull, the hourly metrics, the
-learned batch limit — lives in the stable memories you handed it, so an upgrade
-neither serialises nor restores any of it. A canister holding a campaign's
-worth of pending notifications upgrades as fast as an idle one, and
-`pre_upgrade` has nothing to run out of instructions doing.
+Nothing to do beyond calling `init` again. The outbox, the content a channel
+may still pull, the hourly metrics and the learned batch limit live in the
+stable memories you hand over, so an upgrade neither serialises nor restores
+any of it.
 
 ## Development
 

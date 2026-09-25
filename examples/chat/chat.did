@@ -20,10 +20,10 @@ type Metrics = record {
   backlog : nat64;
 };
 type Misconfigured = variant {
-  // `internet_identity` is unset or not a principal.
-  InternetIdentity;
   // `notification_origin` is unset or empty.
   Origin;
+  // `notification_sender` is unset or not a principal.
+  Sender;
   // The origin does not publish this canister as one of its senders.
   NotAuthorizedSender;
 };

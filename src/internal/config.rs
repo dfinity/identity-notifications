@@ -8,7 +8,7 @@ pub const DEFAULT_CAPACITY_MB: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
-    pub internet_identity: Principal,
+    pub sender: Principal,
     pub origin: String,
     pub capacity_bytes: usize,
 }
@@ -28,11 +28,11 @@ pub fn read() -> Result<Config, Misconfigured> {
         return Err(Misconfigured::Origin);
     }
 
-    if !env_var_name_exists("internet_identity") {
-        return Err(Misconfigured::InternetIdentity);
+    if !env_var_name_exists("notification_sender") {
+        return Err(Misconfigured::Sender);
     }
-    let internet_identity = Principal::from_text(env_var_value("internet_identity"))
-        .map_err(|_| Misconfigured::InternetIdentity)?;
+    let sender = Principal::from_text(env_var_value("notification_sender"))
+        .map_err(|_| Misconfigured::Sender)?;
 
     let capacity_mb = if env_var_name_exists("notification_capacity_mb") {
         env_var_value("notification_capacity_mb")
@@ -43,7 +43,7 @@ pub fn read() -> Result<Config, Misconfigured> {
     };
 
     Ok(Config {
-        internet_identity,
+        sender,
         origin,
         capacity_bytes: capacity_mb * 1_048_576,
     })

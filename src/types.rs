@@ -71,8 +71,8 @@ pub struct Bucket {
 pub enum Misconfigured {
     /// `notification_origin` is unset or empty.
     Origin,
-    /// `internet_identity` is unset or not a principal.
-    InternetIdentity,
+    /// `notification_sender` is unset or not a principal.
+    Sender,
     /// The origin does not publish this canister as one of its senders.
     NotAuthorizedSender,
 }
