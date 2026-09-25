@@ -1000,6 +1000,11 @@ instruction budget. So the library keeps everything in `ic-stable-structures`
 maps over memories the app hands it, and `init` is called again after an
 upgrade rather than anything being restored.
 
+The app names each memory rather than passing a base id. Five is not a number
+worth hiding, and an app that handed over a base could not see what it was
+giving up — or notice when a later version silently took a sixth id that was
+already holding something of its own. Naming them makes that a compile error.
+
 That also replaces the lane heaps with ordered keys: `(lane, expires_at, id)`
 sorts a lane by expiry, so taking a batch is a range scan and the ordering
 survives an upgrade because it was never stored. Parked entries sort by

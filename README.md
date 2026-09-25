@@ -17,7 +17,7 @@ identity-notifications = "0.1"
 
 ```rust
 use ic_cdk::{init, post_upgrade, update};
-use ic_stable_structures::memory_manager::MemoryManager;
+use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications as notifications;
 use identity_notifications::Notification;
@@ -30,14 +30,15 @@ thread_local! {
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 }
 
-// `notifications::MEMORIES` consecutive ids from here are the library's; keep
-// your own state out of them.
-const NOTIFICATIONS_BASE: u8 = 10;
+// The library's memories, named one by one: what it costs you is visible, and
+// a version that needs another one will not compile against this.
+const NOTIFICATION_MEMORIES: [MemoryId; notifications::MEMORIES] =
+    [MemoryId::new(10), MemoryId::new(11), MemoryId::new(12), MemoryId::new(13), MemoryId::new(14)];
 
 #[init]
 #[post_upgrade]
 fn init() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
 }
 
 #[update]

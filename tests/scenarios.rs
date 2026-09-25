@@ -3,7 +3,7 @@
 //! `flush::apply`; everything worth checking is on this side of the await.
 
 use candid::Principal;
-use ic_stable_structures::memory_manager::MemoryManager;
+use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use ic_stable_structures::DefaultMemoryImpl;
 use identity_notifications::internal::flush::{self, Outcome};
 use identity_notifications::internal::ii;
@@ -12,6 +12,13 @@ use identity_notifications::{Notification, Urgency};
 use std::collections::HashMap;
 
 const HOUR: u64 = 3_600_000_000_000;
+const MEMORY_IDS: [MemoryId; identity_notifications::MEMORIES] = [
+    MemoryId::new(0),
+    MemoryId::new(1),
+    MemoryId::new(2),
+    MemoryId::new(3),
+    MemoryId::new(4),
+];
 const CAPACITY: u64 = 1_073_741_824;
 
 /// Whether Internet Identity knows a recipient, and whether they have a
@@ -40,7 +47,7 @@ impl World {
         // maps run in a test without a replica.
         let manager = Box::leak(Box::new(MemoryManager::init(DefaultMemoryImpl::default())));
         Self {
-            store: Store::new(manager, 0),
+            store: Store::new(manager, MEMORY_IDS),
             known: HashMap::new(),
             room_per_flush,
             batch_limit: 1_000,
@@ -289,7 +296,7 @@ fn an_upgrade_serialises_nothing_and_loses_nothing() {
     let id = identity_notifications::internal::ids::keyed(user(0), "pending");
 
     {
-        let mut store = Store::new(manager, 0);
+        let mut store = Store::new(manager, MEMORY_IDS);
         store.add(
             user(0),
             message("pending", None),
@@ -301,7 +308,7 @@ fn an_upgrade_serialises_nothing_and_loses_nothing() {
     }
 
     // The same memories, a fresh handle: what a post_upgrade does.
-    let reopened = Store::new(manager, 0);
+    let reopened = Store::new(manager, MEMORY_IDS);
     assert!(reopened.content_of(id).is_some(), "content survives");
     assert_eq!(reopened.backlog(), 1, "the outbox survives");
     assert_eq!(reopened.hours().len(), 1, "metrics survive");

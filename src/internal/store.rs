@@ -22,9 +22,10 @@ use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// How many consecutive `MemoryId`s the library takes, starting from the one
-/// the app gives it.
-pub const MEMORIES: u8 = 5;
+/// How many stable memories the library keeps its state in. The app names
+/// every one of them, so this number is visible at the call site and a change
+/// to it is a compile error rather than a collision with the app's own ids.
+pub const MEMORIES: usize = 5;
 
 pub const WEIGHTS: [usize; 4] = [8, 4, 2, 1];
 const LANES: u8 = 4;
@@ -160,17 +161,16 @@ pub enum Event {
 }
 
 impl Store {
-    /// Takes `MEMORIES` consecutive memory ids starting at `base`. The app
-    /// reserves them; nothing else may use them.
-    pub fn new(manager: &MemoryManager<DefaultMemoryImpl>, base: u8) -> Self {
-        let memory = |offset: u8| manager.get(MemoryId::new(base + offset));
-
+    /// Opens the store over the memories the app named. In order: the outbox,
+    /// the entries parked for a second attempt, the content a channel may
+    /// pull, the hourly metrics, and the counters.
+    pub fn new(manager: &MemoryManager<DefaultMemoryImpl>, memories: [MemoryId; MEMORIES]) -> Self {
         Self {
-            ready: BTreeMap::init(memory(0)),
-            parked: BTreeMap::init(memory(1)),
-            content: BTreeMap::init(memory(2)),
-            hours: BTreeMap::init(memory(3)),
-            meta: Cell::init(memory(4), Meta::default()),
+            ready: BTreeMap::init(manager.get(memories[0])),
+            parked: BTreeMap::init(manager.get(memories[1])),
+            content: BTreeMap::init(manager.get(memories[2])),
+            hours: BTreeMap::init(manager.get(memories[3])),
+            meta: Cell::init(manager.get(memories[4]), Meta::default()),
         }
     }
 
@@ -501,12 +501,19 @@ mod tests {
 
     const HOUR: u64 = 3_600_000_000_000;
     const ROOMY: u64 = 1_000_000;
+    const MEMORY_IDS: [MemoryId; MEMORIES] = [
+        MemoryId::new(0),
+        MemoryId::new(1),
+        MemoryId::new(2),
+        MemoryId::new(3),
+        MemoryId::new(4),
+    ];
 
     /// Off-canister, `DefaultMemoryImpl` is a plain vector, so the whole store
     /// runs in a test without a replica.
     fn store() -> Store {
         let manager = Box::leak(Box::new(MemoryManager::init(DefaultMemoryImpl::default())));
-        Store::new(manager, 0)
+        Store::new(manager, MEMORY_IDS)
     }
 
     fn alice() -> Principal {
@@ -645,7 +652,7 @@ mod tests {
     fn nothing_is_lost_across_a_reopen() {
         let manager = Box::leak(Box::new(MemoryManager::init(DefaultMemoryImpl::default())));
         let id = {
-            let mut store = Store::new(manager, 0);
+            let mut store = Store::new(manager, MEMORY_IDS);
             store.add(alice(), note("pending", Some("k"), None), HOUR, ROOMY, 0);
             store.record(HOUR, Event::Sent, 1);
             store.set_batch_limit(17);
@@ -654,7 +661,7 @@ mod tests {
 
         // What an upgrade does: the same memories, a fresh handle, nothing
         // serialised in between.
-        let reopened = Store::new(manager, 0);
+        let reopened = Store::new(manager, MEMORY_IDS);
         assert!(reopened.content_of(id).is_some(), "content survives");
         assert_eq!(reopened.backlog(), 1, "the outbox survives");
         assert_eq!(reopened.hours().len(), 1, "metrics survive");

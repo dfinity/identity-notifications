@@ -15,10 +15,16 @@ use std::cell::RefCell;
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
-/// The library takes `notifications::MEMORIES` consecutive ids from
-/// `NOTIFICATIONS_BASE`; this app keeps its conversations in the one before.
+/// This app's conversations live in one memory; the library names its own,
+/// and how many it takes is right here rather than implied.
 const CHATS_MEMORY: MemoryId = MemoryId::new(0);
-const NOTIFICATIONS_BASE: u8 = 1;
+const NOTIFICATION_MEMORIES: [MemoryId; notifications::MEMORIES] = [
+    MemoryId::new(1),
+    MemoryId::new(2),
+    MemoryId::new(3),
+    MemoryId::new(4),
+    MemoryId::new(5),
+];
 
 // The two endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
@@ -187,7 +193,7 @@ fn title(id: &str, from: Principal) -> String {
 
 #[init]
 fn init() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
 }
 
 /// Nothing to save and nothing to restore: both this app's conversations and
@@ -195,7 +201,7 @@ fn init() {
 /// the handle back.
 #[post_upgrade]
 fn post_upgrade() {
-    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATIONS_BASE));
+    MEMORIES.with_borrow(|manager| notifications::init(manager, NOTIFICATION_MEMORIES));
 }
 
 ic_cdk::export_candid!();
