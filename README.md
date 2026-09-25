@@ -64,6 +64,12 @@ canisters:
         notification_capacity_mb: "1024"   # optional
 ```
 
+## Upgrades
+
+Nothing to do. The library's state is stable, so an upgrade keeps the outbox,
+the content a channel may still pull, the hourly metrics and the batch limit it
+learned — and the mixin re-arms its flush on the way back up.
+
 ## Development
 
 ```
@@ -72,3 +78,4 @@ mops test
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [Releasing.md](Releasing.md).
+`demo/chat` is a chat canister with one-to-one and group conversations.
