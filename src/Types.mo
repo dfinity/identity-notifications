@@ -48,8 +48,8 @@ module {
   public type Misconfigured = {
     /// `notification_origin` is unset or unusable.
     #origin;
-    /// `internet_identity` is unset or not a principal.
-    #internetIdentity;
+    /// `notification_sender` is unset or not a principal.
+    #sender;
     /// The origin does not publish this canister as one of its senders.
     #notAuthorizedSender
   };

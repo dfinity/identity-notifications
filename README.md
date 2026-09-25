@@ -25,10 +25,7 @@ persistent actor {
       {
         title = "New message";
         body = text;
-        // The conversation they will land in, on your own origin.
         url = ?("https://chat.example.com/chats/" # Principal.toText(caller));
-        // The same conversation, named: the next message from this sender
-        // updates this notification instead of stacking another beside it.
         key = ?("chat-" # Principal.toText(caller));
         urgency = null;
         expiresAt = null;
@@ -38,15 +35,18 @@ persistent actor {
 };
 ```
 
-Two more calls, and that is the whole app-facing surface:
+The `url` opens the conversation and the `key` names it, so the next message
+from that sender replaces the notification instead of stacking another beside
+it.
+
+Two more calls complete the surface:
 
 ```motoko
 notifications.dismiss(recipient, "chat-" # Principal.toText(sender));  // no longer needed
 notifications.metrics();                         // the pipeline, hour by hour
 ```
 
-Types come from their own module, since a mixin exports members rather than
-types:
+Types come from their own module:
 
 ```motoko
 import Types "mo:identity-notifications/Types";
@@ -59,16 +59,16 @@ canisters:
   - name: backend
     settings:
       environment_variables:
-        internet_identity:        "rdmx6-jaaaa-aaaaa-aaadq-cai"
+        notification_sender:      "rdmx6-jaaaa-aaaaa-aaadq-cai"   # Internet Identity
         notification_origin:      "https://your-app.icp0.io"
         notification_capacity_mb: "1024"   # optional
 ```
 
 ## Upgrades
 
-Nothing to do. The library's state is stable, so an upgrade keeps the outbox,
-the content a channel may still pull, the hourly metrics and the batch limit it
-learned — and the mixin re-arms its flush on the way back up.
+Nothing to do. The library's state is stable — the outbox, the content a
+channel may still pull, the hourly metrics and the learned batch limit — and
+the mixin re-arms its flush on the way back up.
 
 ## Development
 

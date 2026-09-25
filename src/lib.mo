@@ -26,9 +26,8 @@ import Types "Types";
 /// };
 /// ```
 ///
-/// Configured by environment variables — `internet_identity`,
-/// `notification_origin`, and optionally `notification_capacity_mb` — so
-/// nothing about a deployment is compiled in.
+/// Configured by environment variables: `notification_sender`,
+/// `notification_origin`, and optionally `notification_capacity_mb`.
 mixin<system>() {
 
   /// Long enough that a busy canister batches instead of calling per message,
@@ -127,7 +126,7 @@ mixin<system>() {
   /// origin. Anything else is not ours to answer.
   func senderInfo<system>() : ?CallerInfo.SenderInfo {
     let #ok(config) = configured else return null;
-    let ?info = CallerInfo.read<system>(config.internetIdentity) else return null;
+    let ?info = CallerInfo.read<system>(config.sender) else return null;
     if (info.origin != config.origin) return null;
     ?info
   };
@@ -176,7 +175,7 @@ mixin<system>() {
 
     flushing := true;
     let outcome = try {
-      switch (await II.service(config.internetIdentity).app_send_notification(Flush.arg(config.origin, batch))) {
+      switch (await II.service(config.sender).app_send_notification(Flush.arg(config.origin, batch))) {
         case (#Ok(response)) #answered(response.not_accepted);
         case (#Err(#TooManyNotifications { limit })) #tooMany(Nat64.toNat(Nat64.fromNat32(limit)));
         case (#Err(#NoSuchSender)) #notAuthorized;

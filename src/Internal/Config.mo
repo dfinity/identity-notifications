@@ -11,7 +11,7 @@ module {
   let DEFAULT_CAPACITY_MB : Nat = 1024;
 
   public type Config = {
-    internetIdentity : Principal;
+    sender : Principal;
     origin : Text;
     capacityBytes : Nat
   };
@@ -22,10 +22,10 @@ module {
     let ?origin = Runtime.envVar<system>("notification_origin") else return #err(#origin);
     if (Text.size(origin) == 0) return #err(#origin);
 
-    let ?identity = Runtime.envVar<system>("internet_identity") else return #err(#internetIdentity);
+    let ?identity = Runtime.envVar<system>("notification_sender") else return #err(#sender);
 
     #ok {
-      internetIdentity = Principal.fromText(identity);
+      sender = Principal.fromText(identity);
       origin;
       capacityBytes = megabytes<system>() * 1_048_576
     }
