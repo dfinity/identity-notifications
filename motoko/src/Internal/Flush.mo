@@ -43,8 +43,6 @@ module {
     outcome : Outcome,
     now : Time.Time
   ) {
-    Metrics.record(pipeline, now, #sent, batch.size());
-
     switch outcome {
       case (#answered(notAccepted)) {
         let refused = Map.empty<Nat64, II.NotAcceptedReason>();
@@ -52,20 +50,21 @@ module {
           Map.add(refused, Nat64.compare, entry.id, entry.reason)
         };
 
-        Metrics.record(pipeline, now, #accepted, batch.size() - notAccepted.size());
-
         for (entry in batch.values()) {
           switch (Map.get(refused, Nat64.compare, entry.id)) {
-            case null Outbox.settle(outbox, entry);
+            case null {
+              count(pipeline, entry, #accepted);
+              Outbox.settle(outbox, entry)
+            };
             case (?#Deferred { retry_after }) {
-              Metrics.record(pipeline, now, #deferred, 1);
+              count(pipeline, entry, #deferred);
               Outbox.defer(outbox, entry, Nat64.toNat(retry_after))
             };
             case (?_) {
               // No such recipient, or no channel: the user fixes both, and has
               // until the notification expires to do it.
               if (not Outbox.park(outbox, entry, now)) {
-                Metrics.record(pipeline, now, #dropped, 1)
+                count(pipeline, entry, #dropped)
               }
             }
           }
@@ -75,7 +74,7 @@ module {
       case (#unreachable) {
         for (entry in batch.values()) {
           if (not Outbox.park(outbox, entry, now)) {
-            Metrics.record(pipeline, now, #dropped, 1)
+            count(pipeline, entry, #dropped)
           }
         }
       };
@@ -93,5 +92,15 @@ module {
     case 1 #Normal;
     case 2 #Low;
     case _ #VeryLow
+  };
+
+  /// A step counts in the hour its notification came in, and in the funnel its
+  /// app named.
+  public func count(pipeline : Metrics.State, entry : Outbox.Entry, event : Metrics.Event) {
+    Metrics.record(pipeline, entry.queuedHour, event, 1);
+    switch (entry.funnel) {
+      case (?name) Metrics.recordFunnel(pipeline, name, event, 1);
+      case null {}
+    }
   }
 }
