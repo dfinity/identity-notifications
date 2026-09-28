@@ -68,16 +68,25 @@ mixin<system>() {
     /// names. Never traps, never awaits: a notification is an aside to
     /// whatever the app was actually doing.
     public func send<system>(recipient : Principal, notification : Types.Notification) {
+      // The app asked, so the hour and the funnel it asked in count the ask,
+      // whether or not there is anything to send it through.
+      let now = Time.now();
+      let hour = Metrics.hourOf(now);
+      switch (notification.funnel) {
+        case (?name) Metrics.openFunnel(pipeline, name);
+        case null {}
+      };
+      countAsk(hour, notification.funnel, #queued);
+
       switch configured {
         case (#err(why)) {
           note(why);
-          Metrics.record(pipeline, Time.now(), #dropped, 1)
+          countAsk(hour, notification.funnel, #dropped)
         };
         case (#ok(config)) {
-          let now = Time.now();
           if (sender(config) == null) {
             note(#sender);
-            Metrics.record(pipeline, now, #dropped, 1);
+            countAsk(hour, notification.funnel, #dropped);
             return
           };
           let added = Outbox.add(
@@ -89,7 +98,7 @@ mixin<system>() {
             now
           );
           switch added {
-            case null Metrics.record(pipeline, now, #dropped, 1);
+            case null countAsk(hour, notification.funnel, #dropped);
             case (?_) arm<system>()
           }
         }
@@ -112,8 +121,24 @@ mixin<system>() {
 
     public func metrics() : Types.Metrics = {
       hours = Metrics.snapshot(pipeline);
+      funnels = Metrics.funnels(pipeline);
       backlog = Outbox.backlog(outbox);
       misconfigured
+    };
+
+    /// Drops a funnel's row. What it counted goes with it, and notifications
+    /// still carrying it are counted in their hour alone.
+    public func forgetFunnel(name : Text) {
+      Metrics.forgetFunnel(pipeline, name)
+    }
+  };
+
+  /// A step of a notification that has no entry yet: the ask itself.
+  func countAsk(hour : Time.Time, funnel : ?Text, event : Metrics.Event) {
+    Metrics.record(pipeline, hour, event, 1);
+    switch funnel {
+      case (?name) Metrics.recordFunnel(pipeline, name, event, 1);
+      case null {}
     }
   };
 
@@ -134,8 +159,21 @@ mixin<system>() {
   /// devices may still pull it.
   public shared func _internet_identity_notification_received(id : Nat64) : async () {
     let ?_ = senderInfo<system>() else return;
-    if (Outbox.holds(outbox, id)) {
-      Metrics.record(pipeline, Time.now(), #received, 1)
+    if (not Outbox.holds(outbox, id)) return;
+    if (not Outbox.markReceived(outbox, id)) return;
+    switch (Outbox.entryOf(outbox, id)) {
+      case (?entry) Flush.count(pipeline, entry, #received);
+      case null {}
+    }
+  };
+
+  /// Somebody acted on the notification a channel showed them.
+  public shared func _internet_identity_notification_opened(id : Nat64) : async () {
+    let ?_ = senderInfo<system>() else return;
+    if (not Outbox.markOpened(outbox, id)) return;
+    switch (Outbox.entryOf(outbox, id)) {
+      case (?entry) Flush.count(pipeline, entry, #opened);
+      case null {}
     }
   };
 
@@ -211,10 +249,17 @@ mixin<system>() {
     };
 
     let now = Time.now();
-    Outbox.sweep(outbox, now);
+    // Internet Identity held them and no channel ever showed them, which is the
+    // delivery pipeline's quietest loss.
+    for (entry in Outbox.sweep(outbox, now).values()) {
+      Flush.count(pipeline, entry, #dropped)
+    };
     Outbox.promote(outbox, now);
     let (batch, expired) = Outbox.sendable(outbox, Outbox.take(outbox, batchLimit), now);
-    if (expired > 0) Metrics.record(pipeline, now, #dropped, expired);
+    for (entry in expired.values()) {
+      Flush.count(pipeline, entry, #dropped)
+    };
+
     // Nothing is sendable yet: a parked entry still has its turn coming.
     if (batch.size() == 0) return arm<system>();
 

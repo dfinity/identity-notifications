@@ -120,7 +120,11 @@ impl World {
     }
 
     fn dropped(&self) -> u64 {
-        self.store.hours().iter().map(|bucket| bucket.dropped).sum()
+        self.store
+            .hours()
+            .iter()
+            .map(|bucket| bucket.counts.dropped)
+            .sum()
     }
 }
 
@@ -344,7 +348,7 @@ fn an_upgrade_serialises_nothing_and_loses_nothing() {
             CAPACITY,
             HOUR,
         );
-        store.record(HOUR, Event::Sent, 1);
+        store.record(HOUR, Event::Queued, 1);
     }
 
     // The same memories, a fresh handle: what a post_upgrade does.

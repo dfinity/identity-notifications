@@ -20,6 +20,8 @@ import Types "../Types";
 /// repeat of a key finds it in one look.
 module {
 
+  let HOUR : Nat = 3_600_000_000_000;
+
   public let LANES : Nat = 4;
   public let WEIGHTS : [Nat] = [8, 4, 2, 1];
 
@@ -37,7 +39,17 @@ module {
     var dueAt : Time.Time;
     var stage : Stage;
     /// Its one second attempt has been spent.
-    var retried : Bool
+    var retried : Bool;
+    /// A channel has told the app it showed this one, so a second channel
+    /// showing it too is not a second delivery to count.
+    var received : Bool;
+    /// Somebody acted on the notification a channel showed.
+    var opened : Bool;
+    /// The hour this notification was queued in, which is the hour every step
+    /// it takes afterwards is counted in.
+    queuedHour : Time.Time;
+    /// The funnel its app named, or none.
+    funnel : ?Text
   };
 
   /// Keyed by the time they come up, so the soonest is the first entry.
@@ -85,7 +97,7 @@ module {
     capacityBytes : Nat,
     now : Time.Time
   ) : ?Nat64 {
-    sweep(self, now);
+    ignore sweep(self, now);
 
     let id = switch (notification.key) {
       case (?key) Ids.keyed(recipient, key);
@@ -147,7 +159,11 @@ module {
           var expiresAt = expiresAt;
           var dueAt = now;
           var stage = #nowhere;
-          var retried = false
+          var retried = false;
+          var received = false;
+          var opened = false;
+          queuedHour = now - (now % HOUR);
+          funnel = notification.funnel
         };
         Map.add(self.entries, Nat64.compare, id, entry);
         place(self, entry, #waiting, now)
@@ -203,31 +219,35 @@ module {
 
   public func take(self : State, count : Nat) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);
 
-  /// What a batch may still be sent: anything past its expiry would be refused
-  /// by Internet Identity, and anything the app has since dismissed is no
-  /// longer wanted. Only an expiry counts as a drop.
-  public func sendable(self : State, batch : [Entry], now : Time.Time) : ([Entry], Nat) {
+  /// What a batch may still be sent, and what expired before anything could
+  /// carry it, which is its cohort losing one. Anything the app has since
+  /// dismissed is no longer wanted and is neither.
+  public func sendable(self : State, batch : [Entry], now : Time.Time) : ([Entry], [Entry]) {
     let live = List.empty<Entry>();
-    var expired = 0;
+    let expired = List.empty<Entry>();
 
     for (entry in batch.values()) {
       if (entry.expiresAt <= now) {
         forget(self, entry.id);
-        expired += 1
+        List.add(expired, entry)
       } else if (holds(self, entry.id)) {
         List.add(live, entry)
       }
     };
 
-    (List.toArray(live), expired)
+    (List.toArray(live), List.toArray(expired))
   };
 
   /// Drops what an expired notification was still holding. Internet Identity
   /// will not pull content it can no longer deliver.
-  public func sweep(self : State, now : Time.Time) {
-    for (entry in due(self.accepted, now).values()) {
+  /// Returns what expired without any channel having shown it, which is the
+  /// delivery pipeline's quietest loss and the caller's to count.
+  public func sweep(self : State, now : Time.Time) : [Entry] {
+    let expired = due(self.accepted, now);
+    for (entry in expired.values()) {
       forget(self, entry.id)
-    }
+    };
+    Array.filter<Entry>(expired, func(entry) = not entry.received)
   };
 
   /// The app says this no longer needs anyone's attention: it leaves the
@@ -235,6 +255,35 @@ module {
   public func dismiss(self : State, recipient : Principal, key : Text) {
     forget(self, Ids.keyed(recipient, key))
   };
+
+  /// Whether this is the first channel to report showing the notification.
+  /// Every channel a recipient has is woken for it, so the report comes once
+  /// per channel and the delivery is counted on the first.
+  public func markReceived(self : State, id : Nat64) : Bool {
+    switch (Map.get(self.entries, Nat64.compare, id)) {
+      case (?entry) {
+        if (entry.received) return false;
+        entry.received := true;
+        true
+      };
+      case null false
+    }
+  };
+
+  /// Whether this is the first time somebody acted on the notification.
+  public func markOpened(self : State, id : Nat64) : Bool {
+    switch (Map.get(self.entries, Nat64.compare, id)) {
+      case (?entry) {
+        if (entry.opened) return false;
+        entry.opened := true;
+        true
+      };
+      case null false
+    }
+  };
+
+  /// The entry a step belongs to, so it can be counted where it came in.
+  public func entryOf(self : State, id : Nat64) : ?Entry = Map.get(self.entries, Nat64.compare, id);
 
   public func contentOf(self : State, id : Nat64) : ?Types.Content = Map.get(self.content, Nat64.compare, id);
 

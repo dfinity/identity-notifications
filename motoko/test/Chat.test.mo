@@ -51,7 +51,8 @@ func message(key : Text, urgency : ?Types.Urgency, expiresAt : ?Int) : Types.Not
   url = null;
   key = ?key;
   urgency;
-  expiresAt
+  expiresAt;
+  funnel = null
 };
 
 func send(w : World, to : Principal, note : Types.Notification, now : Int) {
@@ -61,7 +62,7 @@ func send(w : World, to : Principal, note : Types.Notification, now : Int) {
 /// One flush: what Internet Identity would answer, applied the way the mixin
 /// applies it.
 func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
-  Outbox.sweep(w.outbox, now);
+  ignore Outbox.sweep(w.outbox, now);
   Outbox.promote(w.outbox, now);
   let (batch, _) = Outbox.sendable(w.outbox, Outbox.take(w.outbox, w.batchLimit), now);
   if (batch.size() == 0) return { sent = 0; accepted = 0 };
@@ -108,22 +109,22 @@ func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
 };
 
 func totals(w : World) : {
-  sent : Nat;
+  queued : Nat;
   accepted : Nat;
   dropped : Nat;
   deferred : Nat
 } {
-  var sent = 0;
+  var queued = 0;
   var accepted = 0;
   var dropped = 0;
   var deferred = 0;
   for (bucket in Metrics.snapshot(w.pipeline).values()) {
-    sent += bucket.sent;
-    accepted += bucket.accepted;
-    dropped += bucket.dropped;
-    deferred += bucket.deferred
+    queued += bucket.counts.queued;
+    accepted += bucket.counts.accepted;
+    dropped += bucket.counts.dropped;
+    deferred += bucket.counts.deferred
   };
-  { sent; accepted; dropped; deferred }
+  { queued; accepted; dropped; deferred }
 };
 
 // A small group of active people: every message reaches everyone, in one call.

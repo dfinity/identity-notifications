@@ -12,8 +12,17 @@ func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high
   url : ?Text;
   key : ?Text;
   urgency : ?{ #veryLow; #low; #normal; #high };
-  expiresAt : ?Int
-} = { title; body = "b"; url = null; key; urgency; expiresAt = null };
+  expiresAt : ?Int;
+  funnel : ?Text
+} = {
+  title;
+  body = "b";
+  url = null;
+  key;
+  urgency;
+  expiresAt = null;
+  funnel = null
+};
 
 // The same key is the same notification: the second send replaces the first.
 do {
@@ -161,10 +170,10 @@ do {
   Outbox.settle(o, batch[0]);
   assert Outbox.backlog(o) == 0;
 
-  Outbox.sweep(o, HOUR - 1);
+  ignore Outbox.sweep(o, HOUR - 1);
   assert Outbox.holds(o, id);
 
-  Outbox.sweep(o, HOUR);
+  ignore Outbox.sweep(o, HOUR);
   assert not Outbox.holds(o, id)
 };
 
@@ -178,12 +187,12 @@ do {
 
   let (live, expired) = Outbox.sendable(o, Outbox.take(o, 10), 0);
   assert live.size() == 0;
-  assert expired == 0;
+  assert expired.size() == 0;
 
   ignore Outbox.add(o, alice, note("y", ?"j", null), HOUR, 1_000_000, 0);
   let (none, one) = Outbox.sendable(o, Outbox.take(o, 10), HOUR);
   assert none.size() == 0;
-  assert one == 1;
+  assert one.size() == 1;
   assert Outbox.backlog(o) == 0
 };
 
@@ -202,7 +211,7 @@ do {
 
   Outbox.promote(o, 2 * MINUTE);
   let (live, expired) = Outbox.sendable(o, Outbox.take(o, 1), 2 * MINUTE);
-  assert expired == 0;
+  assert expired.size() == 0;
   assert live.size() == 1;
   switch (Outbox.contentOf(o, switch id { case (?id) id; case null (0 : Nat64) })) {
     case (?content) assert content.title == "two";
@@ -223,7 +232,7 @@ do {
 
   let (live, expired) = Outbox.sendable(o, Outbox.take(o, 1), MINUTE + 1);
   assert live.size() == 0;
-  assert expired == 1
+  assert expired.size() == 1
 };
 
 // An empty outbox is nothing to wake for; anything waiting is due now, and a
