@@ -257,7 +257,7 @@ fn sender_info() -> Option<SenderInfo> {
     }
 
     let info = internal::caller_info::decode(&msg_caller_info_data())?;
-    (info.origin == config.origin).then_some(info)
+    (internal::origin::fold(&info.origin) == internal::origin::fold(&config.origin)).then_some(info)
 }
 
 /// Sets the wake-up for when the outbox next has something to do: the coalesce
