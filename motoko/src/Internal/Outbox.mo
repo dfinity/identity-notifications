@@ -122,9 +122,16 @@ module {
     };
 
     switch (Map.get(self.entries, Nat64.compare, id)) {
-      // Still on its way out: its content is replaced, the entry stands.
       case (?entry) {
-        if (entry.stage != #accepted) return ?id;
+        // Still on its way out, so the entry stands: what this send brings is
+        // content and, unless that entry has spent its second attempt, a window
+        // of its own. An entry that was refused keeps the window it was refused
+        // in, so a dormant recipient costs an app one round of refusals however
+        // often it repeats the key. The lane it was queued in stands either way.
+        if (entry.stage != #accepted) {
+          if (not entry.retried) entry.expiresAt := expiresAt;
+          return ?id
+        };
         // Accepted, so Internet Identity holds a notification whose content
         // has just changed. Sending it again replaces that one.
         entry.lane := lane(notification.urgency);
@@ -184,6 +191,14 @@ module {
     for (entry in due(self.parked, now).values()) {
       place(self, entry, #waiting, now)
     }
+  };
+
+  /// When the outbox next has something to do: now, where anything is waiting,
+  /// or the soonest parked entry's turn. Nothing queued, no answer.
+  public func nextDue(self : State) : ?Time.Time {
+    if (LaneQueue.size(self.ready) > 0) return ?0;
+    for (((at, _), _) in Map.entries(self.parked)) return ?at;
+    null
   };
 
   public func take(self : State, count : Nat) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);

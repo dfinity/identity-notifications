@@ -1,3 +1,4 @@
+import Int "mo:core/Int";
 import Nat64 "mo:core/Nat64";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
@@ -53,9 +54,10 @@ mixin<system>() {
   var batchLimit : Nat = BATCH_GUESS;
   var misconfigured : ?{ why : Types.Misconfigured; since : Time.Time } = null;
   var seeded : Bool = false;
-  /// Transient because a timer does not survive an upgrade: a canister that
-  /// came back believing one was armed would never arm another.
-  transient var flushArmed : Bool = false;
+  /// The wake-up that is set, and when it fires, so a nearer one can take its
+  /// place. Transient because a timer does not survive an upgrade: a canister
+  /// that came back believing one was armed would never arm another.
+  transient var armed : ?(Timer.TimerId, Time.Time) = null;
   transient var flushing : Bool = false;
   transient var senderOverride : ?Principal = null;
 
@@ -161,17 +163,37 @@ mixin<system>() {
     misconfigured := ?{ why; since = Time.now() }
   };
 
+  /// Sets the wake-up for when the outbox next has something to do: the
+  /// coalesce window where anything is waiting, the due time where an entry is
+  /// parked for later, and no timer at all for an empty outbox. A call in
+  /// flight carries its own wake-up, and one already set for later gives way to
+  /// a nearer one.
   func arm<system>() {
-    if (flushArmed or flushing) return;
-    flushArmed := true;
-    ignore Timer.setTimer<system>(
-      #nanoseconds COALESCE,
-      func() : async () { await flush() }
+    if (flushing) return;
+    let ?due = Outbox.nextDue(outbox) else return;
+
+    let now = Time.now();
+    let soonest = now + COALESCE;
+    let at = if (due > soonest) due else soonest;
+    switch armed {
+      case (?(_, when)) if (when <= at) return;
+      case null {}
+    };
+    switch armed {
+      case (?(timer, _)) Timer.cancelTimer(timer);
+      case null {}
+    };
+    armed := ?(
+      Timer.setTimer<system>(
+        #nanoseconds(Int.abs(at - now)),
+        func() : async () { await flush() }
+      ),
+      at
     )
   };
 
   func flush() : async () {
-    flushArmed := false;
+    armed := null;
     if (flushing) return;
 
     let config = switch configured {
@@ -192,7 +214,8 @@ mixin<system>() {
     Outbox.promote(outbox, now);
     let (batch, expired) = Outbox.sendable(outbox, Outbox.take(outbox, batchLimit), now);
     if (expired > 0) Metrics.record(pipeline, now, #dropped, expired);
-    if (batch.size() == 0) return;
+    // Nothing is sendable yet: a parked entry still has its turn coming.
+    if (batch.size() == 0) return arm<system>();
 
     flushing := true;
     let outcome = try {
@@ -214,10 +237,11 @@ mixin<system>() {
     };
 
     Flush.apply(outbox, pipeline, batch, outcome, now);
-    if (Outbox.backlog(outbox) > 0) arm<system>()
+    arm<system>()
   };
 
   // Runs on every install and every upgrade. A timer does not survive one, so
-  // an outbox that did is picked up here rather than waiting for a send.
-  if (Outbox.backlog(outbox) > 0) arm<system>()
+  // an outbox that did is picked up here rather than waiting for a send. A
+  // fresh install has nothing queued, which arming answers with no timer.
+  arm<system>()
 }
