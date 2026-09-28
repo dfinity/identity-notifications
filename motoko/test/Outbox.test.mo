@@ -185,4 +185,57 @@ do {
   assert none.size() == 0;
   assert one == 1;
   assert Outbox.backlog(o) == 0
+};
+
+let MINUTE = 60_000_000_000;
+
+// Nothing refused a deferred notification, so a repeat of its key is given the
+// window it asks for rather than being stuck with the first send's.
+do {
+  let o = Outbox.empty();
+  let id = Outbox.add(o, alice, note("one", ?"k", null), MINUTE, 1_000_000, 0);
+  let batch = Outbox.take(o, 1);
+  Outbox.defer(o, batch[0], 2 * MINUTE);
+
+  ignore Outbox.add(o, alice, note("two", ?"k", null), 5 * MINUTE, 1_000_000, MINUTE);
+  assert Outbox.nextDue(o) == ?(2 * MINUTE);
+
+  Outbox.promote(o, 2 * MINUTE);
+  let (live, expired) = Outbox.sendable(o, Outbox.take(o, 1), 2 * MINUTE);
+  assert expired == 0;
+  assert live.size() == 1;
+  switch (Outbox.contentOf(o, switch id { case (?id) id; case null (0 : Nat64) })) {
+    case (?content) assert content.title == "two";
+    case null assert false
+  }
+};
+
+// A refusal spends the second attempt, so a repeat keeps the window it was
+// refused in: a dormant recipient costs an app one round of refusals.
+do {
+  let o = Outbox.empty();
+  ignore Outbox.add(o, alice, note("one", ?"k", null), MINUTE, 1_000_000, 0);
+  let batch = Outbox.take(o, 1);
+  assert Outbox.park(o, batch[0], 0);
+
+  ignore Outbox.add(o, alice, note("two", ?"k", null), 5 * MINUTE, 1_000_000, MINUTE);
+  Outbox.promote(o, MINUTE);
+
+  let (live, expired) = Outbox.sendable(o, Outbox.take(o, 1), MINUTE + 1);
+  assert live.size() == 0;
+  assert expired == 1
+};
+
+// An empty outbox is nothing to wake for; anything waiting is due now, and a
+// deferred notification is due when Internet Identity asked.
+do {
+  let o = Outbox.empty();
+  assert Outbox.nextDue(o) == null;
+
+  ignore Outbox.add(o, alice, note("one", ?"k", null), MINUTE, 1_000_000, 0);
+  assert Outbox.nextDue(o) == ?0;
+
+  let batch = Outbox.take(o, 1);
+  Outbox.defer(o, batch[0], 3 * MINUTE);
+  assert Outbox.nextDue(o) == ?(3 * MINUTE)
 }
