@@ -3,13 +3,13 @@
 use super::ids;
 use super::keys::{self, EntryKey};
 use crate::types::{
-    Bucket, Content, Funnel, Misconfigured, MisconfiguredSince, Notification, NotificationId,
+    Bucket, Content, Counts, Funnel, Misconfigured, MisconfiguredSince, Notification,
+    NotificationId,
 };
-use candid::{CandidType, Decode, Encode, Principal};
+use candid::Principal;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::{Bound, Storable};
 use ic_stable_structures::{BTreeMap, DefaultMemoryImpl};
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -33,7 +33,7 @@ const LANES: u8 = 4;
 const HOUR: u64 = 3_600_000_000_000;
 const KEEP_HOURS: usize = 720;
 
-#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub id: NotificationId,
     pub recipient: Principal,
@@ -172,30 +172,6 @@ impl Storable for Row {
     }
 }
 
-/// Candid for the values whose shape may grow.
-macro_rules! candid_storable {
-    ($type:ty, $max:expr) => {
-        impl Storable for $type {
-            const BOUND: Bound = Bound::Bounded {
-                max_size: $max,
-                is_fixed_size: false,
-            };
-
-            fn to_bytes(&self) -> Cow<'_, [u8]> {
-                Cow::Owned(Encode!(self).expect("candid encoding"))
-            }
-
-            fn into_bytes(self) -> Vec<u8> {
-                Encode!(&self).expect("candid encoding")
-            }
-
-            fn from_bytes(bytes: Cow<[u8]>) -> Self {
-                Decode!(bytes.as_ref(), Self).expect("candid decoding")
-            }
-        }
-    };
-}
-
 /// The app's own text, held until a channel pulls it or it expires.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredContent(pub Content);
@@ -262,14 +238,129 @@ impl Storable for StoredContent {
 
 /// A row of the metrics map: an hour of the pipeline, or the library's
 /// counters under `COUNTERS_ROW`. Hour zero is the epoch, so never a bucket.
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MetricsRow {
     Hour(Bucket),
     Counters(Meta),
     /// A funnel an app named, and what became of what it labelled.
     Funnel(Funnel),
 }
-candid_storable!(MetricsRow, 256);
+
+const HOUR_ROW: u8 = 0;
+const COUNTER_ROW: u8 = 1;
+const FUNNEL_ROW: u8 = 2;
+
+fn push_counts(bytes: &mut Vec<u8>, counts: &Counts) {
+    bytes.extend_from_slice(&counts.queued.to_be_bytes());
+    bytes.extend_from_slice(&counts.accepted.to_be_bytes());
+    bytes.extend_from_slice(&counts.received.to_be_bytes());
+    bytes.extend_from_slice(&counts.opened.to_be_bytes());
+    bytes.extend_from_slice(&counts.dropped.to_be_bytes());
+    bytes.extend_from_slice(&counts.deferred.to_be_bytes());
+}
+
+fn take_counts(rest: &mut &[u8]) -> Counts {
+    Counts {
+        queued: take_u64(rest),
+        accepted: take_u64(rest),
+        received: take_u64(rest),
+        opened: take_u64(rest),
+        dropped: take_u64(rest),
+        deferred: take_u64(rest),
+    }
+}
+
+fn take_u8(rest: &mut &[u8]) -> u8 {
+    let (head, tail) = rest.split_at(1);
+    *rest = tail;
+    head[0]
+}
+
+fn take_u64(rest: &mut &[u8]) -> u64 {
+    let (head, tail) = rest.split_at(8);
+    *rest = tail;
+    u64::from_be_bytes(head.try_into().expect("eight bytes"))
+}
+
+/// Unbounded, because a bound would size every page for the longest funnel name
+/// an app might name a campaign, where all but a handful of rows are an hour of
+/// counters. Encoded field by field, a kind byte first, the way an entry row is.
+impl Storable for MetricsRow {
+    const BOUND: Bound = Bound::Unbounded;
+
+    fn to_bytes(&self) -> Cow<'_, [u8]> {
+        let mut bytes = Vec::new();
+        match self {
+            MetricsRow::Hour(bucket) => {
+                bytes.push(HOUR_ROW);
+                bytes.extend_from_slice(&bucket.start.to_be_bytes());
+                push_counts(&mut bytes, &bucket.counts);
+            }
+            MetricsRow::Counters(meta) => {
+                bytes.push(COUNTER_ROW);
+                bytes.extend_from_slice(&meta.counter.to_be_bytes());
+                bytes.extend_from_slice(&meta.id_seed.to_be_bytes());
+                bytes.extend_from_slice(&meta.bytes.to_be_bytes());
+                bytes.extend_from_slice(&meta.batch_limit.to_be_bytes());
+                bytes.extend_from_slice(&meta.queued.to_be_bytes());
+                match &meta.misconfigured {
+                    Some(since) => {
+                        bytes.push(1);
+                        bytes.push(match since.why {
+                            Misconfigured::Origin => 0,
+                            Misconfigured::Sender => 1,
+                            Misconfigured::NotAuthorizedSender => 2,
+                        });
+                        bytes.extend_from_slice(&since.since.to_be_bytes());
+                    }
+                    None => bytes.push(0),
+                }
+            }
+            MetricsRow::Funnel(funnel) => {
+                bytes.push(FUNNEL_ROW);
+                push_field(&mut bytes, funnel.name.as_bytes());
+                push_counts(&mut bytes, &funnel.counts);
+            }
+        }
+        Cow::Owned(bytes)
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.to_bytes().into_owned()
+    }
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
+        let mut rest = bytes.as_ref();
+        match take_u8(&mut rest) {
+            HOUR_ROW => MetricsRow::Hour(Bucket {
+                start: take_u64(&mut rest),
+                counts: take_counts(&mut rest),
+            }),
+            COUNTER_ROW => MetricsRow::Counters(Meta {
+                counter: take_u64(&mut rest),
+                id_seed: take_u64(&mut rest),
+                bytes: take_u64(&mut rest),
+                batch_limit: take_u64(&mut rest),
+                queued: take_u64(&mut rest),
+                misconfigured: (take_u8(&mut rest) == 1).then(|| MisconfiguredSince {
+                    why: match take_u8(&mut rest) {
+                        0 => Misconfigured::Origin,
+                        1 => Misconfigured::Sender,
+                        _ => Misconfigured::NotAuthorizedSender,
+                    },
+                    since: take_u64(&mut rest),
+                }),
+            }),
+            _ => MetricsRow::Funnel(Funnel {
+                name: {
+                    let len = take_len(&mut rest);
+                    take_text(&mut rest, len)
+                },
+                counts: take_counts(&mut rest),
+            }),
+        }
+    }
+}
 
 /// An hour's row is keyed by its start in nanoseconds, so the counters and the
 /// funnels take the top of the key space, which no hour reaches for another
@@ -277,14 +368,11 @@ candid_storable!(MetricsRow, 256);
 const COUNTERS_ROW: u64 = u64::MAX;
 const FUNNEL_BASE: u64 = u64::MAX - u16::MAX as u64 - 1;
 
-/// Kept whole in its row, which candid bounds at 256 bytes.
-const MAX_LABEL: usize = 64;
-
 const fn funnel_row(funnel: u16) -> u64 {
     FUNNEL_BASE + funnel as u64
 }
 
-#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Meta {
     pub counter: u64,
     pub id_seed: u64,
@@ -293,7 +381,6 @@ pub struct Meta {
     pub queued: u64,
     pub misconfigured: Option<MisconfiguredSince>,
 }
-candid_storable!(Meta, 256);
 
 pub struct Store {
     entries: BTreeMap<EntryKey, Row, Memory>,
@@ -774,7 +861,6 @@ impl Store {
     /// The row this label counts in, opening one where the app has not used it
     /// before. `0` is no funnel at all.
     pub fn funnel_id(&mut self, name: &str) -> u16 {
-        let name: String = name.chars().take(MAX_LABEL).collect();
         let mut next = funnel_row(1);
         for row in self.rows.range(FUNNEL_BASE..COUNTERS_ROW) {
             if let MetricsRow::Funnel(funnel) = row.value() {
@@ -791,7 +877,7 @@ impl Store {
         self.rows.insert(
             next,
             MetricsRow::Funnel(Funnel {
-                name,
+                name: name.to_string(),
                 ..Funnel::default()
             }),
         );
@@ -937,6 +1023,101 @@ fn size_of_content(content: &Content) -> u64 {
 mod tests {
     use super::*;
     use crate::types::Urgency;
+
+    fn counts() -> Counts {
+        // Distinct per field, so a transposed pair cannot round-trip.
+        Counts {
+            queued: 1,
+            accepted: 2,
+            received: 3,
+            opened: 4,
+            dropped: 5,
+            deferred: 6,
+        }
+    }
+
+    fn row_round_trip(row: MetricsRow) {
+        assert_eq!(MetricsRow::from_bytes(row.to_bytes()), row);
+    }
+
+    #[test]
+    fn an_hour_row_round_trips() {
+        row_round_trip(MetricsRow::Hour(Bucket {
+            start: 7 * HOUR,
+            counts: counts(),
+        }));
+    }
+
+    #[test]
+    fn a_counters_row_round_trips() {
+        row_round_trip(MetricsRow::Counters(Meta {
+            counter: 1,
+            id_seed: 2,
+            bytes: 3,
+            batch_limit: 4,
+            queued: 5,
+            misconfigured: None,
+        }));
+    }
+
+    #[test]
+    fn a_counters_row_round_trips_every_reason_it_is_misconfigured() {
+        for why in [
+            Misconfigured::Origin,
+            Misconfigured::Sender,
+            Misconfigured::NotAuthorizedSender,
+        ] {
+            row_round_trip(MetricsRow::Counters(Meta {
+                counter: 1,
+                id_seed: 2,
+                bytes: 3,
+                batch_limit: 4,
+                queued: 5,
+                misconfigured: Some(MisconfiguredSince { why, since: 9 }),
+            }));
+        }
+    }
+
+    #[test]
+    fn a_funnel_row_round_trips() {
+        row_round_trip(MetricsRow::Funnel(Funnel {
+            name: "checkout".into(),
+            counts: counts(),
+        }));
+    }
+
+    #[test]
+    fn a_funnel_name_is_kept_whole() {
+        let named = "🎯".repeat(400);
+        let row = MetricsRow::Funnel(Funnel {
+            name: named.clone(),
+            counts: counts(),
+        });
+
+        let MetricsRow::Funnel(read) = MetricsRow::from_bytes(row.to_bytes()) else {
+            panic!("a funnel row");
+        };
+        assert_eq!(read.name, named);
+    }
+
+    #[test]
+    fn a_funnel_keeps_the_name_the_app_gave_it() {
+        let mut store = store();
+        let named = "spring campaign — 🌷 all of it, spelled out in full".repeat(20);
+
+        let funnel = store.funnel_id(&named);
+
+        assert_eq!(
+            store
+                .funnels()
+                .into_iter()
+                .find(|funnel| funnel.name == named)
+                .map(|funnel| funnel.name),
+            Some(named.clone()),
+            "a name the app can no longer recognise is no label at all"
+        );
+        assert_eq!(store.funnel_id(&named), funnel, "and it is the same funnel");
+    }
 
     fn round_trip(content: Content) {
         let stored = StoredContent(content);
