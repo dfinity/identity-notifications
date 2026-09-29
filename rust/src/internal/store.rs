@@ -15,8 +15,8 @@ use std::borrow::Cow;
 pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 /// The stable memories the library keeps its state in. Content has its own
-/// because it runs to 8KB where a row is 66 bytes, and a `StableBTreeMap`
-/// sizes its nodes from the value bound.
+/// because a `StableBTreeMap` pages from its value bound, and content is
+/// unbounded where a row is 66 bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Memories {
     /// Notifications waiting to be sent, and where each one stands.
@@ -196,10 +196,69 @@ macro_rules! candid_storable {
     };
 }
 
-/// Bounded so the map can index it, and past any realistic notification.
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+/// The app's own text, held until a channel pulls it or it expires.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredContent(pub Content);
-candid_storable!(StoredContent, 8_192);
+
+/// Stands in for a url the app did not give. No length can: an empty one is a
+/// url an app may send, and reads back as the empty string it wrote.
+const NO_URL: u32 = u32::MAX;
+
+/// A length and then that many bytes.
+fn push_field(bytes: &mut Vec<u8>, field: &[u8]) {
+    bytes.extend_from_slice(&(field.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(field);
+}
+
+/// Reads a length, moving `rest` past it.
+fn take_len(rest: &mut &[u8]) -> u32 {
+    let (head, tail) = rest.split_at(4);
+    *rest = tail;
+    u32::from_be_bytes(head.try_into().expect("four bytes"))
+}
+
+/// Reads `len` bytes as text, moving `rest` past them.
+fn take_text(rest: &mut &[u8], len: u32) -> String {
+    let (head, tail) = rest.split_at(len as usize);
+    *rest = tail;
+    String::from_utf8(head.to_vec()).expect("stored text is utf-8")
+}
+
+/// Unbounded, so the map pages at a kilobyte instead of sizing every node for
+/// the longest text an app might ever send, and text past a page spills into
+/// pages of its own rather than being refused. Encoded by hand, field by field,
+/// so what a notification costs to store is its own length and nothing more.
+impl Storable for StoredContent {
+    const BOUND: Bound = Bound::Unbounded;
+
+    fn to_bytes(&self) -> Cow<'_, [u8]> {
+        let Content { title, body, url } = &self.0;
+        let mut bytes =
+            Vec::with_capacity(12 + title.len() + body.len() + url.as_ref().map_or(0, String::len));
+        push_field(&mut bytes, title.as_bytes());
+        push_field(&mut bytes, body.as_bytes());
+        match url {
+            Some(url) => push_field(&mut bytes, url.as_bytes()),
+            None => bytes.extend_from_slice(&NO_URL.to_be_bytes()),
+        }
+        Cow::Owned(bytes)
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.to_bytes().into_owned()
+    }
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
+        let mut rest = bytes.as_ref();
+        let title_len = take_len(&mut rest);
+        let title = take_text(&mut rest, title_len);
+        let body_len = take_len(&mut rest);
+        let body = take_text(&mut rest, body_len);
+        let url_len = take_len(&mut rest);
+        let url = (url_len != NO_URL).then(|| take_text(&mut rest, url_len));
+        StoredContent(Content { title, body, url })
+    }
+}
 
 /// A row of the metrics map: an hour of the pipeline, or the library's
 /// counters under `COUNTERS_ROW`. Hour zero is the epoch, so never a bucket.
@@ -878,6 +937,81 @@ fn size_of_content(content: &Content) -> u64 {
 mod tests {
     use super::*;
     use crate::types::Urgency;
+
+    fn round_trip(content: Content) {
+        let stored = StoredContent(content);
+        let bytes = stored.to_bytes();
+        assert_eq!(StoredContent::from_bytes(bytes), stored);
+    }
+
+    #[test]
+    fn content_round_trips() {
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: Some("/chats/7".into()),
+        });
+    }
+
+    #[test]
+    fn content_round_trips_without_a_url() {
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: None,
+        });
+    }
+
+    #[test]
+    fn an_empty_url_is_not_a_missing_one() {
+        let empty = StoredContent(Content {
+            title: String::new(),
+            body: String::new(),
+            url: Some(String::new()),
+        });
+        let missing = StoredContent(Content {
+            title: String::new(),
+            body: String::new(),
+            url: None,
+        });
+
+        assert_ne!(empty.to_bytes(), missing.to_bytes());
+        assert_eq!(
+            StoredContent::from_bytes(empty.to_bytes()).0.url,
+            Some(String::new())
+        );
+        assert_eq!(StoredContent::from_bytes(missing.to_bytes()).0.url, None);
+    }
+
+    #[test]
+    fn content_round_trips_text_that_is_not_ascii() {
+        round_trip(Content {
+            title: "Diner om zes? 🍝".into(),
+            body: "Ja — tot dan".into(),
+            url: Some("/chats/zes?q=één".into()),
+        });
+    }
+
+    #[test]
+    fn content_round_trips_past_a_page() {
+        round_trip(Content {
+            title: "x".repeat(4_096),
+            body: "y".repeat(16_384),
+            url: Some("z".repeat(1_024)),
+        });
+    }
+
+    #[test]
+    fn content_costs_its_own_length() {
+        let stored = StoredContent(Content {
+            title: "ab".into(),
+            body: "cde".into(),
+            url: Some("f".into()),
+        });
+
+        // Three lengths and the bytes they count, and nothing besides.
+        assert_eq!(stored.to_bytes().len(), 12 + 2 + 3 + 1);
+    }
 
     const HOUR: u64 = 3_600_000_000_000;
     const MINUTE: u64 = 60_000_000_000;
