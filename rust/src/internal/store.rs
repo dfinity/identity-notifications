@@ -1287,6 +1287,25 @@ mod tests {
     }
 
     #[test]
+    fn a_funnel_counts_an_ask_that_never_became_a_notification() {
+        // What `send` does for an app it cannot send for: the ask is counted, and
+        // so is the loss, both in the funnel the app named.
+        let mut store = store();
+        let funnel = store.funnel_id("promo");
+        store.record(0, Event::Queued, 1);
+        store.record_in_funnel(funnel, Event::Queued, 1);
+        store.record(0, Event::Dropped, 1);
+        store.record_in_funnel(funnel, Event::Dropped, 1);
+
+        let funnels = store.funnels();
+        assert_eq!(
+            (funnels[0].counts.queued, funnels[0].counts.dropped),
+            (1, 1)
+        );
+        assert_eq!(store.hours()[0].counts.queued, 1);
+    }
+
+    #[test]
     fn an_open_counts_once_and_only_while_the_window_is_open() {
         let mut store = store();
         let id = store
