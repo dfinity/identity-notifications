@@ -4,7 +4,9 @@ The two packages version and publish independently, each from its own tag:
 `motoko-vX.Y.Z` publishes `motoko/` to [mops.one](https://mops.one), and
 `rust-vX.Y.Z` publishes `rust/` to [crates.io](https://crates.io).
 
-1. Bump `version` in `motoko/mops.toml` or `rust/Cargo.toml`.
+1. Bump `version` in `motoko/mops.toml`, or for Rust in `rust/Cargo.toml`, and
+   run `cargo update -p identity-notifications` in `rust/` so `Cargo.lock`
+   records the new version (publishing uses `--locked`).
 2. Update the version in that package's install snippet in its `README.md`.
 3. In that package's `Changelog.md`, rename `## Next` to `## X.Y.Z` and add a
    fresh empty `## Next` at the top.
