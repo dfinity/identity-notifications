@@ -24,7 +24,7 @@ module {
   public func read(trusted : Principal) : ?SenderInfo {
     let signer = Prim.callerInfoSigner();
     if (signer.size() == 0) return null;
-    if (Principal.fromBlob(signer) != trusted) return null;
+    if (signer.fromBlob() != trusted) return null;
 
     decode(Prim.callerInfoData())
   };
@@ -32,7 +32,7 @@ module {
   /// `<domain><origin><account>`, each length-prefixed, as Internet Identity
   /// signs it.
   public func decode(info : Blob) : ?SenderInfo {
-    let bytes = Blob.toArray(info);
+    let bytes = info.toArray();
     var at = 0;
 
     let ?domain = field(bytes, at) else return null;
@@ -48,13 +48,13 @@ module {
 
     ?{
       origin = text;
-      account = Principal.fromBlob(Blob.fromArray(account.value))
+      account = Blob.fromArray(account.value).fromBlob()
     }
   };
 
   func field(bytes : [Nat8], at : Nat) : ?{ value : [Nat8]; next : Nat } {
     if (at >= bytes.size()) return null;
-    let length = Nat8.toNat(bytes[at]);
+    let length = bytes[at].toNat();
     let from = at + 1;
     if (from + length > bytes.size()) return null;
 
@@ -62,5 +62,5 @@ module {
     ?{ value; next = from + length }
   };
 
-  func textOf(bytes : [Nat8]) : ?Text = Text.decodeUtf8(Blob.fromArray(bytes))
+  func textOf(bytes : [Nat8]) : ?Text = Blob.fromArray(bytes).decodeUtf8()
 }

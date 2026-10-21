@@ -24,8 +24,7 @@ module {
 
   public func arg(origin : Text, batch : [Outbox.Entry]) : II.SendNotificationArg = {
     origin;
-    notifications = Array.map<Outbox.Entry, II.Notification>(
-      batch,
+    notifications = batch.map<Outbox.Entry, II.Notification>(
       func(entry) = {
         id = entry.id;
         recipient = entry.recipient;
@@ -47,23 +46,23 @@ module {
       case (#answered(notAccepted)) {
         let refused = Map.empty<Nat64, II.NotAcceptedReason>();
         for (entry in notAccepted.values()) {
-          Map.add(refused, Nat64.compare, entry.id, entry.reason)
+          refused.add(Nat64.compare, entry.id, entry.reason)
         };
 
         for (entry in batch.values()) {
-          switch (Map.get(refused, Nat64.compare, entry.id)) {
+          switch (refused.get(Nat64.compare, entry.id)) {
             case null {
               count(pipeline, entry, #accepted);
-              Outbox.settle(outbox, entry)
+              outbox.settle(entry)
             };
             case (?#Deferred { retry_after }) {
               count(pipeline, entry, #deferred);
-              Outbox.defer(outbox, entry, Nat64.toNat(retry_after))
+              outbox.defer(entry, retry_after.toNat())
             };
             case (?_) {
               // No such recipient, or no channel: the user fixes both, and has
               // until the notification expires to do it.
-              if (not Outbox.park(outbox, entry, now)) {
+              if (not outbox.park(entry, now)) {
                 count(pipeline, entry, #dropped)
               }
             }
@@ -73,7 +72,7 @@ module {
 
       case (#unreachable) {
         for (entry in batch.values()) {
-          if (not Outbox.park(outbox, entry, now)) {
+          if (not outbox.park(entry, now)) {
             count(pipeline, entry, #dropped)
           }
         }
@@ -81,7 +80,7 @@ module {
 
       case (#tooMany(_) or #notAuthorized) {
         for (entry in batch.values()) {
-          Outbox.requeue(outbox, entry, now)
+          outbox.requeue(entry, now)
         }
       }
     }
@@ -97,9 +96,9 @@ module {
   /// A step counts in the hour its notification came in, and in the funnel its
   /// app named.
   public func count(pipeline : Metrics.State, entry : Outbox.Entry, event : Metrics.Event) {
-    Metrics.record(pipeline, entry.queuedHour, event, 1);
+    pipeline.record(entry.queuedHour, event, 1);
     switch (entry.funnel) {
-      case (?name) Metrics.recordFunnel(pipeline, name, event, 1);
+      case (?name) pipeline.recordFunnel(name, event, 1);
       case null {}
     }
   }

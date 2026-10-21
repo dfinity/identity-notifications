@@ -58,7 +58,7 @@ module {
   /// A funnel an app has forgotten is not brought back by a notification still
   /// carrying it.
   public func recordFunnel(self : State, name : Text, event : Event, count : Nat) {
-    switch (Map.get(self.funnels, Text.compare, name)) {
+    switch (self.funnels.get(Text.compare, name)) {
       case (?counts) bump(counts, event, count);
       case null {}
     }
@@ -66,27 +66,25 @@ module {
 
   /// Opens a funnel's row where the app has not used this label before.
   public func openFunnel(self : State, name : Text) {
-    switch (Map.get(self.funnels, Text.compare, name)) {
+    switch (self.funnels.get(Text.compare, name)) {
       case (?_) {};
-      case null Map.add(self.funnels, Text.compare, name, fresh())
+      case null self.funnels.add(Text.compare, name, fresh())
     }
   };
 
   /// Drops a funnel's row. What it counted goes with it.
   public func forgetFunnel(self : State, name : Text) {
-    Map.remove(self.funnels, Text.compare, name)
+    self.funnels.remove(Text.compare, name)
   };
 
   public func snapshot(self : State) : [Types.Bucket] {
-    Array.map<(Time.Time, Counts), Types.Bucket>(
-      Map.toArray(self.hours),
+    self.hours.toArray().map<(Time.Time, Counts), Types.Bucket>(
       func((start, counts)) = { start; counts = read(counts) }
     )
   };
 
   public func funnels(self : State) : [Types.Funnel] {
-    Array.map<(Text, Counts), Types.Funnel>(
-      Map.toArray(self.funnels),
+    self.funnels.toArray().map<(Text, Counts), Types.Funnel>(
       func((name, counts)) = { name; counts = read(counts) }
     )
   };
@@ -112,11 +110,11 @@ module {
   };
 
   func hourly(self : State, hour : Time.Time) : Counts {
-    switch (Map.get(self.hours, Int.compare, hour)) {
+    switch (self.hours.get(Int.compare, hour)) {
       case (?counts) counts;
       case null {
         let counts = fresh();
-        Map.add(self.hours, Int.compare, hour, counts);
+        self.hours.add(Int.compare, hour, counts);
         prune(self);
         counts
       }
@@ -124,9 +122,9 @@ module {
   };
 
   func prune(self : State) {
-    while (Map.size(self.hours) > KEEP) {
-      switch (Map.entries(self.hours).next()) {
-        case (?(oldest, _)) Map.remove(self.hours, Int.compare, oldest);
+    while (self.hours.size() > KEEP) {
+      switch (self.hours.entries().next()) {
+        case (?(oldest, _)) self.hours.remove(Int.compare, oldest);
         case null return
       }
     }

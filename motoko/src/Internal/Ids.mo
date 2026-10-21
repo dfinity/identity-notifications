@@ -19,13 +19,12 @@ module {
   public func keyed(recipient : Principal, key : Text) : Nat64 {
     // The recipient is length-prefixed so that no pair of (recipient, key)
     // can be spelled two ways and land on one id.
-    let who = Blob.toArray(Principal.toBlob(recipient));
-    let what = Blob.toArray(Text.encodeUtf8(key));
+    let who = recipient.toBlob().toArray();
+    let what = key.encodeUtf8().toArray();
     let digest = Sha256.fromIter(
       #sha256,
-      Iter.concat(
-        Iter.singleton(Nat8.fromNat(who.size())),
-        Iter.concat(who.values(), what.values())
+      Iter.singleton(Nat8.fromNat(who.size())).concat(
+        who.values().concat(what.values())
       )
     );
     KEYED | (leading64(digest) & (KEYED - 1))
@@ -43,11 +42,11 @@ module {
   };
 
   func leading64(digest : Blob) : Nat64 {
-    let bytes = Blob.toArray(digest);
+    let bytes = digest.toArray();
     var value : Nat64 = 0;
     var i = 0;
     while (i < 8) {
-      value := (value << 8) | Nat64.fromNat(Nat8.toNat(bytes[i]));
+      value := (value << 8) | Nat64.fromNat(bytes[i].toNat());
       i += 1
     };
     value
