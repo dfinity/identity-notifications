@@ -2,6 +2,8 @@
 
 ## Next
 
+## 0.2.0
+
 * Breaking change: requires moc 2.0.0 or later.
   `_internet_identity_notification_content` is a query, which is how Internet
   Identity calls it, so content pulls now succeed: 0.1.0 declared it an update,
