@@ -18,7 +18,15 @@ The two packages version and publish independently, each from its own tag:
 
 6. Check the publish workflow run to confirm it succeeded.
 
-The Mops workflow needs the repository secret `MOPS_IDENTITY_PEM`, a publisher
-identity exported with `mops user export`. The crates.io workflow needs
-`CARGO_REGISTRY_TOKEN`. Both are scoped to the `release` environment, under
-**Settings → Environments**.
+The Mops workflow needs the secret `MOPS_IDENTITY_PEM`, the PEM of an identity
+that is a maintainer of the Mops package, scoped to the `release` environment
+under **Settings → Environments**. That environment accepts the
+`motoko-v*.*.*` and `rust-v*.*.*` tags.
+
+The crates.io workflow stores no token: it uses
+[trusted publishing](https://crates.io/docs/trusted-publishing), so each run
+gets a short-lived token for the crate. The crate needs a trusted publisher on
+crates.io (its **Settings → Trusted Publishing**): owner `dfinity`, repository
+`identity-notifications`, workflow `publish-crate.yml`, environment `release`.
+A trusted publisher can only be added to a crate that exists, so the first
+release is published by hand with `cargo publish --locked`.

@@ -17,9 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dfinity/setup-dfx@main # Currently required for `mops publish`
+      # The identity is imported here rather than through the action's
+      # `identity-pem` input: with that input the action resolves moc from the
+      # repository root, where there is no `mops.toml`.
       - uses: caffeinelabs/setup-mops@v1
-        with:
+      - run: mops user import --no-encrypt -- "$MOPS_IDENTITY_PEM"
+        env:
           # `MOPS_IDENTITY_PEM` is scoped to the `release` environment; see Settings → Environments.
-          identity-pem: ${{ secrets.MOPS_IDENTITY_PEM }}
+          MOPS_IDENTITY_PEM: ${{ secrets.MOPS_IDENTITY_PEM }}
       - run: mops install
       - run: mops publish
