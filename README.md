@@ -15,10 +15,11 @@ notifications.send<system>(
   {
     title = "New message";
     body = text;
-    url = ?("https://chat.example.com/chats/" # Principal.toText(caller));
-    key = ?("chat-" # Principal.toText(caller));
+    url = ?("https://chat.example.com/chats/" # caller.toText());
+    key = ?("chat-" # caller.toText());
     urgency = null;
     expiresAt = null;
+    funnel = null;
   },
 );
 ```
