@@ -42,6 +42,25 @@ jobs:
       - uses: caffeinelabs/setup-mops@v1
       - run: mops install
       - run: mops test
+      # The demo includes the whole library, so this also holds `src/` to no warnings.
+      - name: Build the demo canister
+        run: $(mops toolchain bin moc) $(mops sources) -Werror demo/chat/main.mo -o chat.wasm
+
+  # Mops resolves one `core` per app, the highest any package asks for, so the
+  # library also has to compile against the newest `core` it allows.
+  motoko-latest-core:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: motoko
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: caffeinelabs/setup-mops@v1
+      - run: mops update core
+      - run: mops test
       - name: Build the demo canister
         run: $(mops toolchain bin moc) $(mops sources) demo/chat/main.mo -o chat.wasm
 

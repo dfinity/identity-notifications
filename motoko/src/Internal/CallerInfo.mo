@@ -1,4 +1,5 @@
 import Prim "mo:⛔";
+import Array "mo:core/Array";
 import Blob "mo:core/Blob";
 import Nat8 "mo:core/Nat8";
 import Principal "mo:core/Principal";
@@ -24,7 +25,7 @@ module {
   public func read(trusted : Principal) : ?SenderInfo {
     let signer = Prim.callerInfoSigner();
     if (signer.size() == 0) return null;
-    if (signer.fromBlob() != trusted) return null;
+    if (Principal.fromBlob(signer) != trusted) return null;
 
     decode(Prim.callerInfoData())
   };
@@ -48,7 +49,7 @@ module {
 
     ?{
       origin = text;
-      account = Blob.fromArray(account.value).fromBlob()
+      account = Principal.fromBlob(account.value.toBlob())
     }
   };
 
@@ -62,5 +63,5 @@ module {
     ?{ value; next = from + length }
   };
 
-  func textOf(bytes : [Nat8]) : ?Text = Blob.fromArray(bytes).decodeUtf8()
+  func textOf(bytes : [Nat8]) : ?Text = bytes.toBlob().decodeUtf8()
 }

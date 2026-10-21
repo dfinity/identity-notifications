@@ -1,6 +1,7 @@
 import Array "mo:core/Array";
 import Int "mo:core/Int";
 import Map "mo:core/Map";
+import Nat "mo:core/Nat";
 import Nat64 "mo:core/Nat64";
 import Time "mo:core/Time";
 import II "II";
@@ -28,7 +29,7 @@ module {
       func(entry) = {
         id = entry.id;
         recipient = entry.recipient;
-        expires_at = ?Nat64.fromNat(Int.abs(entry.expiresAt));
+        expires_at = ?Int.abs(entry.expiresAt).toNat64();
         urgency = ?urgencyOf(entry.lane)
       }
     )

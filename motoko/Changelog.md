@@ -2,6 +2,15 @@
 
 ## Next
 
+## 0.3.0
+
+* Breaking change: depends on `core` 2.6.2, so an app resolves `core` 2.6.2 or
+  later. 0.2.0 did not compile against `core` 2.6, which Mops picks for the
+  library when the app depends on it: `field fromBlob does not exist in type
+  Blob`.
+* Uses `core`'s `toX` conversions in place of the `fromX` ones it deprecates,
+  so the library compiles without warnings against `core` 2.6.2.
+
 ## 0.2.0
 
 * Breaking change: requires moc 2.0.0 or later.
