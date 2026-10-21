@@ -27,3 +27,20 @@ jobs:
           MOPS_IDENTITY_PEM: ${{ secrets.MOPS_IDENTITY_PEM }}
       - run: mops install
       - run: mops publish
+
+  release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/motoko-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      # Notes start from the motoko-v tag just below this one, so they skip the other package's releases.
+      - run: |
+          previous=$(git tag --list 'motoko-v*' --sort=-v:refname | awk -v tag="$GITHUB_REF_NAME" 'found { print; exit } $0 == tag { found = 1 }')
+          gh release create "$GITHUB_REF_NAME" --title "Motoko ${GITHUB_REF_NAME#motoko-v}" --generate-notes ${previous:+--notes-start-tag "$previous"}
+        env:
+          GH_TOKEN: ${{ github.token }}
