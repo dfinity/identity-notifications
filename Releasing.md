@@ -18,7 +18,9 @@ The two packages version and publish independently, each from its own tag:
    git push origin motoko-vX.Y.Z
    ```
 
-6. Check the publish workflow run to confirm it succeeded.
+6. Check the publish workflow run to confirm it succeeded. Once the package is
+   published, the same run creates the GitHub release for the tag, with notes
+   generated since that package's previous tag.
 
 The Mops workflow needs the secret `MOPS_IDENTITY_PEM`, the PEM of an identity
 that is a maintainer of the Mops package, scoped to the `release` environment
