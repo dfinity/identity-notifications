@@ -2,4 +2,4 @@
 
 ## Next
 
-* Nothing yet. See [DESIGN.md](DESIGN.md) for the design this implements.
+* Nothing yet. See [DESIGN.md](https://github.com/dfinity/identity-notifications/blob/main/DESIGN.md) for the design this implements.

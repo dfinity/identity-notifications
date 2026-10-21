@@ -4,8 +4,9 @@ Notify Internet Identity users from a Motoko canister. One call to send; the
 library handles ids, batching, retries, the content Internet Identity pulls
 back, and the delivery metrics.
 
-**Status: implemented, not yet released.** [DESIGN.md](../DESIGN.md) is the
-design it follows, and [../rust](../rust) is the same library in Rust.
+**Status: released on [Mops](https://mops.one/identity-notifications).**
+[DESIGN.md](https://github.com/dfinity/identity-notifications/blob/main/DESIGN.md) is the
+design it follows, and [rust/](https://github.com/dfinity/identity-notifications/tree/main/rust) is the same library in Rust.
 
 ## Using it
 
@@ -77,5 +78,5 @@ mops install
 mops test
 ```
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) and [Releasing.md](../Releasing.md).
+See [CONTRIBUTING.md](https://github.com/dfinity/identity-notifications/blob/main/CONTRIBUTING.md) and [Releasing.md](https://github.com/dfinity/identity-notifications/blob/main/Releasing.md).
 `demo/chat` is a chat canister with one-to-one and group conversations.
