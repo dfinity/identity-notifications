@@ -49,7 +49,7 @@ what the app names when the notification stops mattering — the user read the
 conversation somewhere else:
 
 ```motoko
-notifications.dismiss(recipient, "chat-" # Principal.toText(sender));
+notifications.dismiss(recipient, "chat-" # sender.toText());
 ```
 
 Delivery, hour by hour, for whatever the app already uses to watch itself:
