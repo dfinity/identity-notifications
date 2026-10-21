@@ -33,21 +33,21 @@ module {
     item : T,
     compare : (T, T) -> Order.Order
   ) {
-    PriorityQueue.push(self.lanes[lane], smallestFirst(compare), item)
+    self.lanes[lane].push(smallestFirst(compare), item)
   };
 
   public func size<T>(self : State<T>) : Nat {
     var total = 0;
     var lane = 0;
     while (lane < self.lanes.size()) {
-      total += PriorityQueue.size(self.lanes[lane]);
+      total += self.lanes[lane].size();
       lane += 1
     };
     total
   };
 
   public func laneSize<T>(self : State<T>, lane : Nat) : Nat {
-    PriorityQueue.size(self.lanes[lane])
+    self.lanes[lane].size()
   };
 
   /// Up to `count` items, taking `weights[lane]` from each lane per cycle and
@@ -68,10 +68,10 @@ module {
       while (lane < self.lanes.size()) {
         var turn = 0;
         label turns while (turn < weights[lane]) {
-          if (List.size(taken) >= count) break cycles;
-          switch (PriorityQueue.pop(self.lanes[lane], smallestFirst(compare))) {
+          if (taken.size() >= count) break cycles;
+          switch (self.lanes[lane].pop(smallestFirst(compare))) {
             case (?item) {
-              List.add(taken, item);
+              taken.add(item);
               progressed := true
             };
             case null break turns
@@ -84,6 +84,6 @@ module {
       if (not progressed) break cycles
     };
 
-    List.toArray(taken)
+    taken.toArray()
   }
 }

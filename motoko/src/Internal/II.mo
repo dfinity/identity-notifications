@@ -44,5 +44,5 @@ module {
     }
   };
 
-  public func service(canister : Principal) : Service = actor (Principal.toText(canister)) : Service
+  public func service(canister : Principal) : Service = actor (canister.toText()) : Service
 }

@@ -18,10 +18,10 @@ module {
   /// A canister's gateway origin as Internet Identity spells it. Anything else
   /// — a custom domain, localhost — is its own origin and stands as it is.
   public func fold(origin : Text) : Text {
-    let ?rest = Text.stripStart(origin, #text "https://") else return origin;
+    let ?rest = origin.stripStart(#text "https://") else return origin;
 
     for (domain in GATEWAY_DOMAINS.values()) {
-      switch (Text.stripEnd(rest, #text("." # domain))) {
+      switch (rest.stripEnd(#text("." # domain))) {
         case (?subdomain) if (isCanisterId(subdomain)) {
           return "https://" # subdomain # "." # CANONICAL_DOMAIN
         };

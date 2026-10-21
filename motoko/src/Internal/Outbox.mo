@@ -116,7 +116,7 @@ module {
 
     // Replacing a notification frees what the old one held, so an app that
     // updates one key forever occupies one notification's worth of room.
-    switch (Map.get(self.content, Nat64.compare, id)) {
+    switch (self.content.get(Nat64.compare, id)) {
       case (?old) self.bytes -= sizeOf(old);
       case null {}
     };
@@ -125,7 +125,7 @@ module {
       return null
     };
 
-    Map.add(self.content, Nat64.compare, id, content);
+    self.content.add(Nat64.compare, id, content);
     self.bytes += size;
 
     let expiresAt = switch (notification.expiresAt) {
@@ -133,7 +133,7 @@ module {
       case null defaultExpiry
     };
 
-    switch (Map.get(self.entries, Nat64.compare, id)) {
+    switch (self.entries.get(Nat64.compare, id)) {
       case (?entry) {
         // Still on its way out, so the entry stands: what this send brings is
         // content and, unless that entry has spent its second attempt, a window
@@ -165,7 +165,7 @@ module {
           queuedHour = now - (now % HOUR);
           funnel = notification.funnel
         };
-        Map.add(self.entries, Nat64.compare, id, entry);
+        self.entries.add(Nat64.compare, id, entry);
         place(self, entry, #waiting, now)
       }
     };
@@ -212,12 +212,12 @@ module {
   /// When the outbox next has something to do: now, where anything is waiting,
   /// or the soonest parked entry's turn. Nothing queued, no answer.
   public func nextDue(self : State) : ?Time.Time {
-    if (LaneQueue.size(self.ready) > 0) return ?0;
-    for (((at, _), _) in Map.entries(self.parked)) return ?at;
+    if (self.ready.size() > 0) return ?0;
+    for (((at, _), _) in self.parked.entries()) return ?at;
     null
   };
 
-  public func take(self : State, count : Nat) : [Entry] = LaneQueue.take<Entry>(self.ready, WEIGHTS, count, soonestExpiry);
+  public func take(self : State, count : Nat) : [Entry] = self.ready.take<Entry>(WEIGHTS, count, soonestExpiry);
 
   /// What a batch may still be sent, and what expired before anything could
   /// carry it, which is its cohort losing one. Anything the app has since
@@ -229,13 +229,13 @@ module {
     for (entry in batch.values()) {
       if (entry.expiresAt <= now) {
         forget(self, entry.id);
-        List.add(expired, entry)
+        expired.add(entry)
       } else if (holds(self, entry.id)) {
-        List.add(live, entry)
+        live.add(entry)
       }
     };
 
-    (List.toArray(live), List.toArray(expired))
+    (live.toArray(), expired.toArray())
   };
 
   /// Drops what an expired notification was still holding. Internet Identity
@@ -247,7 +247,7 @@ module {
     for (entry in expired.values()) {
       forget(self, entry.id)
     };
-    Array.filter<Entry>(expired, func(entry) = not entry.received)
+    expired.filter<Entry>(func(entry) = not entry.received)
   };
 
   /// The app says this no longer needs anyone's attention: it leaves the
@@ -260,7 +260,7 @@ module {
   /// Every channel a recipient has is woken for it, so the report comes once
   /// per channel and the delivery is counted on the first.
   public func markReceived(self : State, id : Nat64) : Bool {
-    switch (Map.get(self.entries, Nat64.compare, id)) {
+    switch (self.entries.get(Nat64.compare, id)) {
       case (?entry) {
         if (entry.received) return false;
         entry.received := true;
@@ -272,7 +272,7 @@ module {
 
   /// Whether this is the first time somebody acted on the notification.
   public func markOpened(self : State, id : Nat64) : Bool {
-    switch (Map.get(self.entries, Nat64.compare, id)) {
+    switch (self.entries.get(Nat64.compare, id)) {
       case (?entry) {
         if (entry.opened) return false;
         entry.opened := true;
@@ -283,12 +283,12 @@ module {
   };
 
   /// The entry a step belongs to, so it can be counted where it came in.
-  public func entryOf(self : State, id : Nat64) : ?Entry = Map.get(self.entries, Nat64.compare, id);
+  public func entryOf(self : State, id : Nat64) : ?Entry = self.entries.get(Nat64.compare, id);
 
-  public func contentOf(self : State, id : Nat64) : ?Types.Content = Map.get(self.content, Nat64.compare, id);
+  public func contentOf(self : State, id : Nat64) : ?Types.Content = self.content.get(Nat64.compare, id);
 
   /// `false` when there is no such notification to have received.
-  public func holds(self : State, id : Nat64) : Bool = switch (Map.get(self.content, Nat64.compare, id)) {
+  public func holds(self : State, id : Nat64) : Bool = switch (self.content.get(Nat64.compare, id)) {
     case (?_) true;
     case null false
   };
@@ -313,8 +313,8 @@ module {
   /// was in. A lane is left to `take`, which pops what it hands out.
   func place(self : State, entry : Entry, stage : Destination, at : Time.Time) {
     switch (entry.stage) {
-      case (#parked) Map.remove(self.parked, byTime, (entry.dueAt, entry.id));
-      case (#accepted) Map.remove(self.accepted, byTime, (entry.expiresAt, entry.id));
+      case (#parked) self.parked.remove(byTime, (entry.dueAt, entry.id));
+      case (#accepted) self.accepted.remove(byTime, (entry.expiresAt, entry.id));
       case (#nowhere or #waiting) {}
     };
 
@@ -323,9 +323,9 @@ module {
     entry.dueAt := at;
 
     switch stage {
-      case (#waiting) LaneQueue.push<Entry>(self.ready, entry.lane, entry, soonestExpiry);
-      case (#parked) Map.add(self.parked, byTime, (at, entry.id), entry);
-      case (#accepted) Map.add(self.accepted, byTime, (entry.expiresAt, entry.id), entry)
+      case (#waiting) self.ready.push<Entry>(entry.lane, entry, soonestExpiry);
+      case (#parked) self.parked.add(byTime, (at, entry.id), entry);
+      case (#accepted) self.accepted.add(byTime, (entry.expiresAt, entry.id), entry)
     };
 
     if (queued(stage) and not wasQueued) self.queued += 1;
@@ -334,15 +334,15 @@ module {
 
   /// Takes a notification out of every place it is in, content included.
   func forget(self : State, id : Nat64) {
-    switch (Map.get(self.entries, Nat64.compare, id)) {
+    switch (self.entries.get(Nat64.compare, id)) {
       case (?entry) {
         switch (entry.stage) {
-          case (#parked) Map.remove(self.parked, byTime, (entry.dueAt, entry.id));
-          case (#accepted) Map.remove(self.accepted, byTime, (entry.expiresAt, entry.id));
+          case (#parked) self.parked.remove(byTime, (entry.dueAt, entry.id));
+          case (#accepted) self.accepted.remove(byTime, (entry.expiresAt, entry.id));
           case (#nowhere or #waiting) {}
         };
         if (queued(entry.stage)) self.queued -= 1;
-        Map.remove(self.entries, Nat64.compare, id)
+        self.entries.remove(Nat64.compare, id)
       };
       case null {}
     };
@@ -352,11 +352,11 @@ module {
   /// Everything in a schedule whose time has come, soonest first.
   func due(schedule : Schedule, now : Time.Time) : [Entry] {
     let ready = List.empty<Entry>();
-    label scanning for (((at, _), entry) in Map.entries(schedule)) {
+    label scanning for (((at, _), entry) in schedule.entries()) {
       if (at > now) break scanning;
-      List.add(ready, entry)
+      ready.add(entry)
     };
-    List.toArray(ready)
+    ready.toArray()
   };
 
   func queued(stage : Stage) : Bool = stage == #waiting or stage == #parked;
@@ -367,10 +367,10 @@ module {
   };
 
   func release(self : State, id : Nat64) {
-    switch (Map.get(self.content, Nat64.compare, id)) {
+    switch (self.content.get(Nat64.compare, id)) {
       case (?content) {
         self.bytes -= sizeOf(content);
-        Map.remove(self.content, Nat64.compare, id)
+        self.content.remove(Nat64.compare, id)
       };
       case null {}
     }
@@ -384,9 +384,9 @@ module {
       lane -= 1;
       label shedding loop {
         if (self.bytes + needed <= capacityBytes) return true;
-        if (LaneQueue.laneSize(self.ready, lane) == 0) break shedding;
+        if (self.ready.laneSize(lane) == 0) break shedding;
 
-        let victims = LaneQueue.take<Entry>(self.ready, laneOnly(lane), 1, soonestExpiry);
+        let victims = self.ready.take<Entry>(laneOnly(lane), 1, soonestExpiry);
         if (victims.size() == 0) break shedding;
         forget(self, victims[0].id)
       }

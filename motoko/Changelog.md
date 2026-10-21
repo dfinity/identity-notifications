@@ -7,6 +7,8 @@
   Identity calls it, so content pulls now succeed: 0.1.0 declared it an update,
   and Internet Identity's query calls to it were rejected.
 * The chat demo compiles again: its notification sets `funnel`.
+* The library compiles without warnings on moc 2.0.0, so an app that includes
+  it no longer sees its dot-notation suggestions.
 
 ## 0.1.0
 

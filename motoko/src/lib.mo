@@ -73,7 +73,7 @@ mixin<system>() {
       let now = Time.now();
       let hour = Metrics.hourOf(now);
       switch (notification.funnel) {
-        case (?name) Metrics.openFunnel(pipeline, name);
+        case (?name) pipeline.openFunnel(name);
         case null {}
       };
       countAsk(hour, notification.funnel, #queued);
@@ -89,8 +89,7 @@ mixin<system>() {
             countAsk(hour, notification.funnel, #dropped);
             return
           };
-          let added = Outbox.add(
-            outbox,
+          let added = outbox.add(
             recipient,
             notification,
             now + II_DEFAULT_RETENTION,
@@ -116,28 +115,28 @@ mixin<system>() {
     /// This notification no longer needs anyone's attention. Its content goes,
     /// so a pull finds nothing and a channel that sweeps can close it.
     public func dismiss(recipient : Principal, key : Text) {
-      Outbox.dismiss(outbox, recipient, key)
+      outbox.dismiss(recipient, key)
     };
 
     public func metrics() : Types.Metrics = {
-      hours = Metrics.snapshot(pipeline);
-      funnels = Metrics.funnels(pipeline);
-      backlog = Outbox.backlog(outbox);
+      hours = pipeline.snapshot();
+      funnels = pipeline.funnels();
+      backlog = outbox.backlog();
       misconfigured
     };
 
     /// Drops a funnel's row. What it counted goes with it, and notifications
     /// still carrying it are counted in their hour alone.
     public func forgetFunnel(name : Text) {
-      Metrics.forgetFunnel(pipeline, name)
+      pipeline.forgetFunnel(name)
     }
   };
 
   /// A step of a notification that has no entry yet: the ask itself.
   func countAsk(hour : Time.Time, funnel : ?Text, event : Metrics.Event) {
-    Metrics.record(pipeline, hour, event, 1);
+    pipeline.record(hour, event, 1);
     switch funnel {
-      case (?name) Metrics.recordFunnel(pipeline, name, event, 1);
+      case (?name) pipeline.recordFunnel(name, event, 1);
       case null {}
     }
   };
@@ -148,16 +147,16 @@ mixin<system>() {
     id : Nat64
   ) : async ?Types.Content {
     let ?_ = senderInfo() else return null;
-    Outbox.contentOf(outbox, id)
+    outbox.contentOf(id)
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
   /// devices may still pull it.
   public shared func _internet_identity_notification_received(id : Nat64) : async () {
     let ?_ = senderInfo() else return;
-    if (not Outbox.holds(outbox, id)) return;
-    if (not Outbox.markReceived(outbox, id)) return;
-    switch (Outbox.entryOf(outbox, id)) {
+    if (not outbox.holds(id)) return;
+    if (not outbox.markReceived(id)) return;
+    switch (outbox.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #received);
       case null {}
     }
@@ -166,8 +165,8 @@ mixin<system>() {
   /// Somebody acted on the notification a channel showed them.
   public shared func _internet_identity_notification_opened(id : Nat64) : async () {
     let ?_ = senderInfo() else return;
-    if (not Outbox.markOpened(outbox, id)) return;
-    switch (Outbox.entryOf(outbox, id)) {
+    if (not outbox.markOpened(id)) return;
+    switch (outbox.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #opened);
       case null {}
     }
@@ -205,7 +204,7 @@ mixin<system>() {
   /// a nearer one.
   func arm<system>() {
     if (flushing) return;
-    let ?due = Outbox.nextDue(outbox) else return;
+    let ?due = outbox.nextDue() else return;
 
     let now = Time.now();
     let soonest = now + COALESCE;
@@ -240,18 +239,18 @@ mixin<system>() {
     if (not seeded) {
       seeded := true;
       try {
-        Outbox.seed(outbox, await randomness.raw_rand())
+        outbox.seed(await randomness.raw_rand())
       } catch (_) {}
     };
 
     let now = Time.now();
     // Internet Identity held them and no channel ever showed them, which is the
     // delivery pipeline's quietest loss.
-    for (entry in Outbox.sweep(outbox, now).values()) {
+    for (entry in outbox.sweep(now).values()) {
       Flush.count(pipeline, entry, #dropped)
     };
-    Outbox.promote(outbox, now);
-    let (batch, expired) = Outbox.sendable(outbox, Outbox.take(outbox, batchLimit), now);
+    outbox.promote(now);
+    let (batch, expired) = outbox.sendable(outbox.take(batchLimit), now);
     for (entry in expired.values()) {
       Flush.count(pipeline, entry, #dropped)
     };
@@ -263,7 +262,7 @@ mixin<system>() {
     let outcome = try {
       switch (await II.service(signer).app_send_notification(Flush.arg(config.origin, batch))) {
         case (#Ok(response)) #answered(response.not_accepted);
-        case (#Err(#TooManyNotifications { limit })) #tooMany(Nat64.toNat(Nat64.fromNat32(limit)));
+        case (#Err(#TooManyNotifications { limit })) #tooMany(Nat64.fromNat32(limit).toNat());
         case (#Err(#NoSuchSender)) #notAuthorized;
         case (#Err(#InternalCanisterError(_))) #unreachable
       }

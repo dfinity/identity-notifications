@@ -26,15 +26,14 @@ actor {
   /// One-to-one conversations are named by their two members, so both sides
   /// arrive at the same one.
   func directId(a : Principal, b : Principal) : Text {
-    let x = Principal.toText(a);
-    let y = Principal.toText(b);
+    let x = a.toText();
+    let y = b.toText();
     if (x < y) x # "|" # y else y # "|" # x
   };
 
   public shared ({ caller }) func createGroup(name : Text, members : [Principal]) : async Text {
     let id = "group:" # name;
-    Map.add(
-      conversations,
+    conversations.add(
       Text.compare,
       id,
       { id; members = withCaller(members, caller); messages = List.empty<Message>() }
@@ -44,11 +43,11 @@ actor {
 
   public shared ({ caller }) func sendDirect(to : Principal, text : Text) : async () {
     let id = directId(caller, to);
-    let conversation = switch (Map.get(conversations, Text.compare, id)) {
+    let conversation = switch (conversations.get(Text.compare, id)) {
       case (?existing) existing;
       case null {
         let fresh = { id; members = [caller, to]; messages = List.empty<Message>() };
-        Map.add(conversations, Text.compare, id, fresh);
+        conversations.add(Text.compare, id, fresh);
         fresh
       }
     };
@@ -56,7 +55,7 @@ actor {
   };
 
   public shared ({ caller }) func sendToGroup(id : Text, text : Text) : async () {
-    switch (Map.get(conversations, Text.compare, id)) {
+    switch (conversations.get(Text.compare, id)) {
       case (?conversation) post<system>(conversation, caller, text);
       case null {}
     }
@@ -64,7 +63,7 @@ actor {
 
   /// Everyone in the conversation except the sender hears about it.
   func post<system>(conversation : Conversation, from : Principal, text : Text) {
-    List.add(conversation.messages, { from; text; at = Time.now() });
+    conversation.messages.add({ from; text; at = Time.now() });
 
     for (member in conversation.members.values()) {
       if (member != from) {
@@ -88,18 +87,18 @@ actor {
   /// mark something unread again. The notification is stale only once nothing
   /// in the conversation is unread.
   public shared ({ caller }) func markRead(id : Text, upTo : Time.Time) : async () {
-    let mine = switch (Map.get(readUpTo, Principal.compare, caller)) {
+    let mine = switch (readUpTo.get(Principal.compare, caller)) {
       case (?existing) existing;
       case null {
         let fresh = Map.empty<Text, Time.Time>();
-        Map.add(readUpTo, Principal.compare, caller, fresh);
+        readUpTo.add(Principal.compare, caller, fresh);
         fresh
       }
     };
-    Map.add(mine, Text.compare, id, upTo);
+    mine.add(Text.compare, id, upTo);
 
-    switch (Map.get(conversations, Text.compare, id)) {
-      case (?conversation) switch (List.last(conversation.messages)) {
+    switch (conversations.get(Text.compare, id)) {
+      case (?conversation) switch (conversation.messages.last()) {
         case (?newest) if (upTo >= newest.at) notifications.dismiss(caller, id);
         case null {}
       };
@@ -113,9 +112,9 @@ actor {
 
   func title(conversation : Conversation, from : Principal) : Text {
     if (conversation.members.size() > 2) {
-      conversation.id # " · " # Principal.toText(from)
+      conversation.id # " · " # from.toText()
     } else {
-      Principal.toText(from)
+      from.toText()
     }
   };
 
@@ -124,8 +123,8 @@ actor {
       if (member == caller) return members
     };
     let all = List.empty<Principal>();
-    List.add(all, caller);
-    for (member in members.values()) List.add(all, member);
-    List.toArray(all)
+    all.add(caller);
+    for (member in members.values()) all.add(member);
+    all.toArray()
   }
 }

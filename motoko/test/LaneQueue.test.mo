@@ -7,9 +7,9 @@ type Item = { lane : Nat; deadline : Nat };
 
 func byDeadline(a : Item, b : Item) : { #less; #equal; #greater } = Nat.compare(a.deadline, b.deadline);
 
-func push(q : LaneQueue.State<Item>, lane : Nat, deadline : Nat) = LaneQueue.push<Item>(q, lane, { lane; deadline }, byDeadline);
+func push(q : LaneQueue.State<Item>, lane : Nat, deadline : Nat) = q.push<Item>(lane, { lane; deadline }, byDeadline);
 
-func lanesOf(items : [Item]) : [Nat] = Array.map<Item, Nat>(items, func(i) = i.lane);
+func lanesOf(items : [Item]) : [Nat] = items.map<Item, Nat>(func(i) = i.lane);
 
 // Within a lane, the soonest deadline comes out first.
 do {
@@ -18,9 +18,9 @@ do {
   push(q, 0, 10);
   push(q, 0, 20);
 
-  let out = LaneQueue.take<Item>(q, [1], 3, byDeadline);
-  assert Array.map<Item, Nat>(out, func(i) = i.deadline) == [10, 20, 30];
-  assert LaneQueue.size(q) == 0
+  let out = q.take<Item>([1], 3, byDeadline);
+  assert out.map<Item, Nat>(func(i) = i.deadline) == [10, 20, 30];
+  assert q.size() == 0
 };
 
 // Weights decide the mix: 2:1 gives two of lane 0 per one of lane 1.
@@ -29,7 +29,7 @@ do {
   for (i in Nat.range(0, 6)) { push(q, 0, i) };
   for (i in Nat.range(0, 6)) { push(q, 1, i) };
 
-  assert lanesOf(LaneQueue.take<Item>(q, [2, 1], 6, byDeadline)) == [0, 0, 1, 0, 0, 1]
+  assert lanesOf(q.take<Item>([2, 1], 6, byDeadline)) == [0, 0, 1, 0, 0, 1]
 };
 
 // An empty lane donates its turns instead of holding slots open.
@@ -37,7 +37,7 @@ do {
   let q = LaneQueue.empty<Item>(3);
   for (i in Nat.range(0, 4)) { push(q, 2, i) };
 
-  let out = LaneQueue.take<Item>(q, [8, 4, 1], 4, byDeadline);
+  let out = q.take<Item>([8, 4, 1], 4, byDeadline);
   assert lanesOf(out) == [2, 2, 2, 2]
 };
 
@@ -47,7 +47,7 @@ do {
   for (i in Nat.range(0, 100)) { push(q, 0, i) };
   for (i in Nat.range(0, 100)) { push(q, 1, i) };
 
-  let out = LaneQueue.take<Item>(q, [8, 1], 27, byDeadline);
+  let out = q.take<Item>([8, 1], 27, byDeadline);
   var low = 0;
   for (item in out.values()) { if (item.lane == 1) low += 1 };
   assert low == 3
@@ -59,7 +59,7 @@ do {
   push(q, 0, 1);
   push(q, 1, 1);
 
-  assert LaneQueue.take<Item>(q, [4, 4], 100, byDeadline).size() == 2;
-  assert LaneQueue.size(q) == 0;
-  assert LaneQueue.take<Item>(q, [4, 4], 10, byDeadline).size() == 0
+  assert q.take<Item>([4, 4], 100, byDeadline).size() == 2;
+  assert q.size() == 0;
+  assert q.take<Item>([4, 4], 10, byDeadline).size() == 0
 }
