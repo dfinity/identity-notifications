@@ -9,7 +9,8 @@ The two packages version and publish independently, each from its own tag:
    records the new version (publishing uses `--locked`).
 2. Update the version in that package's install snippet in its `README.md`.
 3. In that package's `Changelog.md`, rename `## Next` to `## X.Y.Z` and add a
-   fresh empty `## Next` at the top.
+   fresh empty `## Next` at the top. The publish workflow refuses a tag whose
+   version has no entries in the changelog, and uses them as the release notes.
 4. Open a PR with those changes; merge once green.
 5. From `main`, tag the merge commit:
 

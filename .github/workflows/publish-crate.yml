@@ -19,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Check the changelog has this version
+        run: ../.github/scripts/changelog-section.sh Changelog.md "${GITHUB_REF_NAME#rust-v}" > /dev/null
       # crates.io trusts this repository, this workflow file, and the `release`
       # environment (the crate's Settings -> Trusted Publishing).
       - name: Authenticate with crates.io
@@ -38,9 +40,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # Notes start from the rust-v tag just below this one, so they skip the other package's releases.
+      # The changelog section comes first, then the merged PRs since the rust-v
+      # tag just below this one, so the list skips the other package's releases.
       - run: |
+          .github/scripts/changelog-section.sh rust/Changelog.md "${GITHUB_REF_NAME#rust-v}" > notes.md
           previous=$(git tag --list 'rust-v*' --sort=-v:refname | awk -v tag="$GITHUB_REF_NAME" 'found { print; exit } $0 == tag { found = 1 }')
-          gh release create "$GITHUB_REF_NAME" --title "Rust ${GITHUB_REF_NAME#rust-v}" --generate-notes ${previous:+--notes-start-tag "$previous"}
+          gh release create "$GITHUB_REF_NAME" --title "Rust ${GITHUB_REF_NAME#rust-v}" --notes-file notes.md --generate-notes ${previous:+--notes-start-tag "$previous"}
         env:
           GH_TOKEN: ${{ github.token }}

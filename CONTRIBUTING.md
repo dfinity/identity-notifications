@@ -27,6 +27,10 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release --target wasm32-unknown-unknown -p chat-example
 ```
 
+A PR that changes `motoko/src` or `rust/src` adds an entry under `## Next` in
+that package's `Changelog.md`; CI checks for it. A change with nothing to tell
+users, such as a refactor or a test, carries the `no-changelog` label instead.
+
 The two libraries follow one design document and are meant to stay in step, so
 a change to how either behaves belongs in both, along with the same test on
 each side.
