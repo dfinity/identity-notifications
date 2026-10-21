@@ -1,4 +1,5 @@
 import Blob "mo:core/Blob";
+import Nat "mo:core/Nat";
 import Nat64 "mo:core/Nat64";
 import Nat8 "mo:core/Nat8";
 import Principal "mo:core/Principal";
@@ -23,7 +24,7 @@ module {
     let what = key.encodeUtf8().toArray();
     let digest = Sha256.fromIter(
       #sha256,
-      Iter.singleton(Nat8.fromNat(who.size())).concat(
+      Iter.singleton(who.size().toNat8()).concat(
         who.values().concat(what.values())
       )
     );
@@ -46,7 +47,7 @@ module {
     var value : Nat64 = 0;
     var i = 0;
     while (i < 8) {
-      value := (value << 8) | Nat64.fromNat(bytes[i].toNat());
+      value := (value << 8) | bytes[i].toNat().toNat64();
       i += 1
     };
     value

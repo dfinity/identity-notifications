@@ -1,4 +1,5 @@
 import Int "mo:core/Int";
+import Nat32 "mo:core/Nat32";
 import Nat64 "mo:core/Nat64";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
@@ -262,7 +263,7 @@ mixin<system>() {
     let outcome = try {
       switch (await II.service(signer).app_send_notification(Flush.arg(config.origin, batch))) {
         case (#Ok(response)) #answered(response.not_accepted);
-        case (#Err(#TooManyNotifications { limit })) #tooMany(Nat64.fromNat32(limit).toNat());
+        case (#Err(#TooManyNotifications { limit })) #tooMany(limit.toNat());
         case (#Err(#NoSuchSender)) #notAuthorized;
         case (#Err(#InternalCanisterError(_))) #unreachable
       }

@@ -2,7 +2,6 @@ import Array "mo:core/Array";
 import Map "mo:core/Map";
 import Int "mo:core/Int";
 import Nat "mo:core/Nat";
-import Nat64 "mo:core/Nat64";
 import Principal "mo:core/Principal";
 import Text "mo:core/Text";
 import Flush "../src/Internal/Flush";
@@ -40,7 +39,7 @@ func world(roomPerFlush : Nat) : World = {
   var batchLimit = 1_000
 };
 
-func user(n : Nat) : Principal = Text.encodeUtf8("user-" # n.toText()).fromBlob();
+func user(n : Nat) : Principal = Principal.fromBlob(Text.encodeUtf8("user-" # n.toText()));
 
 func reachable(w : World, p : Principal) = w.known.add(Principal.compare, p, true);
 func noChannel(w : World, p : Principal) = w.known.add(Principal.compare, p, false);
@@ -96,7 +95,7 @@ func flush(w : World, now : Int) : { sent : Nat; accepted : Nat } {
         id = entry.id;
         recipient = entry.recipient;
         reason = #Deferred {
-          retry_after = Nat64.fromNat(Int.abs(now + MINUTE))
+          retry_after = Int.abs(now + MINUTE).toNat64()
         }
       }
     }
