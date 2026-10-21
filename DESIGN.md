@@ -23,7 +23,7 @@ own timers — leave it off `send` and the compiler warns rather than fails:
 ```motoko
 import Notifications "mo:identity-notifications";
 
-persistent actor {
+actor {
   include Notifications<system>();
 
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
@@ -509,33 +509,28 @@ The mixin injects two methods, and Internet Identity picks by what the channel
 needs:
 
 ```motoko
-public shared func _internet_identity_notification_content(id : Nat64) : async ?Content
+public shared query func _internet_identity_notification_content(id : Nat64) : async ?Content
 public shared func _internet_identity_notification_received(id : Nat64) : async ()
 ```
 
-Both are updates, and the first is temporary. The content pull wants to be a
-query, and the protocol allows it: the replica serves caller info to
-`ReplicatedQuery`, `NonReplicatedQuery` and `CompositeQuery`, refusing it only
-in `Start`, `Init`, `PreUpgrade` and `SystemTask`
-(`rs/embedders/src/wasmtime_embedder/system_api.rs`).
+The content pull is a query, so a channel gets its content without a round of
+consensus. The caller info that authorises it reaches queries: the replica
+serves it to `ReplicatedQuery`, `NonReplicatedQuery` and `CompositeQuery`,
+refusing it only in `Start`, `Init`, `PreUpgrade` and `SystemTask`
+(`rs/embedders/src/wasmtime_embedder/system_api.rs`). Motoko reads it there
+from moc 2.0.0, where the two primitives no longer need `<system>`
+([caffeinelabs/motoko#6414](https://github.com/caffeinelabs/motoko/pull/6414)),
+which makes 2.0.0 the library's minimum compiler. Without caller info a pull
+would hand content to anyone who knew an id, and ids are derived from keys,
+which can be guessable.
 
-Motoko is what blocks it. Its prelude declares the two primitives with
-`<system>`, a capability query bodies never carry, so a query cannot establish
-who is asking — and returning content to anyone who knew an id is not an option,
-since ids are derived from keys and keys can be guessable. A `moc` patched to
-drop that annotation compiles this method as a query and emits the right system
-calls, so the fix is the annotation and nothing else; the annotation is in fact
-backwards, since the contexts where Motoko does grant `system` are exactly the
-ones the replica refuses.
+The content a channel renders is one replica's word rather than the subnet's,
+which is an accepted risk.
 
-Until that lands the pull costs a round of consensus, which at least buys
-certainty: the content a channel renders went through consensus rather than
-being one replica's word, which was an accepted risk while this was a query.
-
-The second records that the notification was delivered and returns nothing —
-delivery happens after the content has been fetched and shown, so a call that
-did both would be claiming receipt for something not yet delivered. Every
-channel fetches, delivers, then marks.
+The receipt is an update. It records that the notification was delivered and
+returns nothing — delivery happens after the content has been fetched and
+shown, so a call that did both would be claiming receipt for something not yet
+delivered. Every channel fetches, delivers, then marks.
 
 A receipt is also the only proof that a user has a working channel, which until now an app could only infer from a
 click.
@@ -976,14 +971,10 @@ any.
    detect a format, and the domain prefix already prevents a blob minted for one
    flow being accepted by the other. The library decodes the blob directly.
 
-2. **Query or update — blocked by the language, not the protocol.** This was to
-   be a query, with uncertified content accepted knowingly. It is an update
-   because Motoko gates caller info behind `<system>`, which queries do not
-   have; the replica itself serves caller info to every query flavour. Verified
-   both ways: the replica's `sender_info` allows `ReplicatedQuery`,
-   `NonReplicatedQuery` and `CompositeQuery`, and a `moc` with the annotation
-   removed compiles the query form. It goes back to a query when Motoko is
-   fixed.
+2. **Query or update — a query.** The content pull is a query, with uncertified
+   content accepted knowingly. The replica serves caller info to every query
+   flavour (`ReplicatedQuery`, `NonReplicatedQuery` and `CompositeQuery`), and
+   Motoko reads it in a query from moc 2.0.0.
 3. **Method names — internal.** `_internet_identity_notification_content` and
    `_internet_identity_notification_received` are called by II's worker and
    implemented by II's library, so both sides have the same owner and change
@@ -994,13 +985,9 @@ any.
 
 ## Rust specifics
 
-**The content pull is a query.** Motoko cannot read caller info from a query —
-its prelude gates the primitive behind the `system` capability — so the Motoko
-library pays consensus for it until
-[caffeinelabs/motoko#6396](https://github.com/caffeinelabs/motoko/pull/6396)
-lands. `ic-cdk` exposes `msg_caller_info_signer` and `msg_caller_info_data`
-with no such gate, and the replica serves caller info to every query flavour,
-so here it is a `#[query]` from the start.
+**The content pull is a query**, as in Motoko. `ic-cdk` exposes
+`msg_caller_info_signer` and `msg_caller_info_data` to queries, so it is a
+`#[query]`.
 
 **State lives in stable memory, not the heap.** Motoko persists its heap, so
 the library's variables simply survive an upgrade. Rust has no such thing, and

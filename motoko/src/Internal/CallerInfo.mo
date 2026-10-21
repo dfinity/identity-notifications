@@ -21,12 +21,12 @@ module {
   /// `null` when the call carries no caller info, when someone other than the
   /// configured Internet Identity signed it, or when the info is not something
   /// this library understands.
-  public func read<system>(trusted : Principal) : ?SenderInfo {
-    let signer = Prim.callerInfoSigner<system>();
+  public func read(trusted : Principal) : ?SenderInfo {
+    let signer = Prim.callerInfoSigner();
     if (signer.size() == 0) return null;
     if (Principal.fromBlob(signer) != trusted) return null;
 
-    decode(Prim.callerInfoData<system>())
+    decode(Prim.callerInfoData())
   };
 
   /// `<domain><origin><account>`, each length-prefixed, as Internet Identity

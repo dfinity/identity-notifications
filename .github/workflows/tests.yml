@@ -42,6 +42,8 @@ jobs:
       - uses: caffeinelabs/setup-mops@v1
       - run: mops install
       - run: mops test
+      - name: Build the demo canister
+        run: $(mops toolchain bin moc) $(mops sources) demo/chat/main.mo -o chat.wasm
 
   motoko-format:
     runs-on: ubuntu-24.04

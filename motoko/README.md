@@ -10,11 +10,13 @@ design it follows, and [rust/](https://github.com/dfinity/identity-notifications
 
 ## Using it
 
+Requires moc 2.0.0 or later.
+
 ```motoko
 import Notifications "mo:identity-notifications";
 import Principal "mo:core/Principal";
 
-persistent actor {
+actor {
   include Notifications<system>();
 
   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {

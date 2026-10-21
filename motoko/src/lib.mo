@@ -15,7 +15,7 @@ import Types "Types";
 /// Notify Internet Identity users from a Motoko canister.
 ///
 /// ```motoko
-/// persistent actor {
+/// actor {
 ///   include Notifications<system>();
 ///
 ///   public shared ({ caller }) func sendMessage(to : Principal, text : Text) : async () {
@@ -144,21 +144,17 @@ mixin<system>() {
 
   /// Called by Internet Identity, not by the app, once a channel has a
   /// notification to render.
-  ///
-  /// An update rather than a query because Motoko cannot read caller info from
-  /// a query, and without it a pull would hand any notification's content to
-  /// anyone who guessed its id.
-  public shared func _internet_identity_notification_content(
+  public shared query func _internet_identity_notification_content(
     id : Nat64
   ) : async ?Types.Content {
-    let ?_ = senderInfo<system>() else return null;
+    let ?_ = senderInfo() else return null;
     Outbox.contentOf(outbox, id)
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
   /// devices may still pull it.
   public shared func _internet_identity_notification_received(id : Nat64) : async () {
-    let ?_ = senderInfo<system>() else return;
+    let ?_ = senderInfo() else return;
     if (not Outbox.holds(outbox, id)) return;
     if (not Outbox.markReceived(outbox, id)) return;
     switch (Outbox.entryOf(outbox, id)) {
@@ -169,7 +165,7 @@ mixin<system>() {
 
   /// Somebody acted on the notification a channel showed them.
   public shared func _internet_identity_notification_opened(id : Nat64) : async () {
-    let ?_ = senderInfo<system>() else return;
+    let ?_ = senderInfo() else return;
     if (not Outbox.markOpened(outbox, id)) return;
     switch (Outbox.entryOf(outbox, id)) {
       case (?entry) Flush.count(pipeline, entry, #opened);
@@ -179,10 +175,10 @@ mixin<system>() {
 
   /// Internet Identity signed this call's caller info, and it names our own
   /// origin. Anything else is not ours to answer.
-  func senderInfo<system>() : ?CallerInfo.SenderInfo {
+  func senderInfo() : ?CallerInfo.SenderInfo {
     let #ok(config) = configured else return null;
     let ?signer = sender(config) else return null;
-    let ?info = CallerInfo.read<system>(signer) else return null;
+    let ?info = CallerInfo.read(signer) else return null;
     if (Origin.fold(info.origin) != Origin.fold(config.origin)) return null;
     ?info
   };

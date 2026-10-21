@@ -8,7 +8,7 @@ import Types "../../src/Types";
 
 /// A chat app, to show what using the library looks like from the outside:
 /// one-to-one conversations and groups, and three calls into the library.
-persistent actor {
+actor {
 
   include Notifications<system>();
 
@@ -76,7 +76,8 @@ persistent actor {
             url = ?("https://chat.example.com/c/" # conversation.id);
             key = ?conversation.id;
             urgency = null;
-            expiresAt = null
+            expiresAt = null;
+            funnel = null
           }
         )
       }
