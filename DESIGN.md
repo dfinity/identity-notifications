@@ -22,6 +22,7 @@ own timers — leave it off `send` and the compiler warns rather than fails:
 
 ```motoko
 import Notifications "mo:identity-notifications";
+import Principal "mo:core/Principal";
 
 actor {
   include Notifications<system>();
@@ -32,10 +33,11 @@ actor {
     notifications.send<system>(to, {
       title     = "New message";
       body      = text;
-      url       = ?("https://chat.example.com/chats/" # Principal.toText(caller));
-      key       = ?("chat-" # Principal.toText(caller));
+      url       = ?("https://chat.example.com/chats/" # caller.toText());
+      key       = ?("chat-" # caller.toText());
       urgency   = null;
       expiresAt = null;
+      funnel    = null;
     });
   };
 };
@@ -709,6 +711,7 @@ public type Notification = {
   key       : ?Text;       // the thing this is about; same key updates it
   urgency   : ?Urgency;    // null = Normal
   expiresAt : ?Time.Time;  // null = II's default retention, five minutes
+  funnel    : ?Text;       // which funnel to count it in, on top of its hour
 };
 
 // What a channel pulls back out. The rest never leaves this canister.

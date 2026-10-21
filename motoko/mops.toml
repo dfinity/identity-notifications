@@ -11,5 +11,8 @@ repository = "https://github.com/dfinity/identity-notifications"
 core = "2.5.0"
 sha2 = "0.2.5"
 
+[requirements]
+moc = "2.0.0"
+
 [toolchain]
 moc = "2.0.0"
