@@ -2,6 +2,11 @@
 
 ## Next
 
+## 0.1.1
+
+* The README links the Motoko package instead of documents that are no longer
+  in the repository.
+
 ## 0.1.0
 
 * First release. `send` notifies Internet Identity users from a Rust canister;
