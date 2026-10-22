@@ -78,5 +78,4 @@ mops install
 mops test
 ```
 
-See [CONTRIBUTING.md](https://github.com/dfinity/identity-notifications/blob/main/CONTRIBUTING.md) and [Releasing.md](https://github.com/dfinity/identity-notifications/blob/main/Releasing.md).
 `demo/chat` is a chat canister with one-to-one and group conversations.
