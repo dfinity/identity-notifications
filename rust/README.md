@@ -4,7 +4,8 @@ Notify Internet Identity users from a Rust canister. One call to send; the
 library handles ids, batching, retries, the content Internet Identity pulls
 back, and the delivery metrics.
 
-**Status: implemented, not yet released.** [DESIGN.md](https://github.com/dfinity/identity-notifications/blob/main/DESIGN.md) is the
+**Status: released on [crates.io](https://crates.io/crates/identity-notifications).**
+[DESIGN.md](https://github.com/dfinity/identity-notifications/blob/main/DESIGN.md) is the
 design it follows, and [motoko/](https://github.com/dfinity/identity-notifications/tree/main/motoko) is the same library in Motoko.
 
 ## Using it
@@ -24,7 +25,7 @@ use identity_notifications as notifications;
 use identity_notifications::{Memories, Notification};
 use std::cell::RefCell;
 
-// The two endpoints Internet Identity calls. Nothing else to wire up.
+// The endpoints Internet Identity calls. Nothing else to wire up.
 notifications::endpoints!();
 
 thread_local! {
@@ -33,8 +34,16 @@ thread_local! {
 }
 
 #[init]
-#[post_upgrade]
 fn init() {
+    open_notifications();
+}
+
+#[post_upgrade]
+fn post_upgrade() {
+    open_notifications();
+}
+
+fn open_notifications() {
     MEMORIES.with_borrow(|manager| {
         notifications::init(
             manager,

@@ -10,8 +10,8 @@ keywords = ["internet-computer", "internet-identity", "notifications", "web-push
 categories = ["api-bindings", "wasm"]
 
 [dependencies]
-candid = "0.10"
-ic-cdk = "0.20"
+candid = "0.10.24"
+ic-cdk = "0.20.1"
 ic-cdk-timers = "1.0"
 ic-stable-structures = "0.7"
 serde = { version = "1", features = ["derive"] }

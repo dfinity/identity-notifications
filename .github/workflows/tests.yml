@@ -29,6 +29,32 @@ jobs:
       - name: Check the example's candid is current
         run: cargo test -p chat-example candid_is_up_to_date
 
+  # An app's lockfile can hold any version the manifest allows, so the library
+  # also has to build against the lowest versions of the IC crates it names.
+  rust-minimum-versions:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Pin the IC crates to the lowest versions Cargo.toml allows
+        run: |
+          # Dependents first: ic-cdk at its floor is what lets candid go down to its own.
+          for crate in ic-cdk ic-cdk-timers ic-stable-structures candid; do
+            floor=$(sed -n "s/^$crate = \"\(.*\)\"$/\1/p" Cargo.toml)
+            while [ "$(tr -cd . <<<"$floor" | wc -c)" -lt 2 ]; do floor="$floor.0"; done
+            cargo update -p "$crate" --precise "$floor"
+          done
+      - run: cargo test
+      - run: cargo build --release --target wasm32-unknown-unknown -p chat-example
+
   motoko:
     runs-on: ubuntu-24.04
     defaults:
