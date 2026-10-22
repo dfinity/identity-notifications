@@ -2,11 +2,8 @@
 
 Notify Internet Identity users from a Motoko canister. One call to send; the
 library handles ids, batching, retries, the content Internet Identity pulls
-back, and the delivery metrics.
-
-**Status: released on [Mops](https://mops.one/identity-notifications).**
-[DESIGN.md](https://github.com/dfinity/identity-notifications/blob/main/DESIGN.md) is the
-design it follows, and [rust/](https://github.com/dfinity/identity-notifications/tree/main/rust) is the same library in Rust.
+back, and the delivery metrics. For Rust, see
+[identity-notifications on crates.io](https://crates.io/crates/identity-notifications).
 
 ## Using it
 

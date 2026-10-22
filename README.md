@@ -4,9 +4,6 @@ Notify Internet Identity users from your canister. One call to send; the
 library handles the ids, the batching, the retries, the content Internet
 Identity pulls back, and the delivery metrics.
 
-**Status: released on [Mops](https://mops.one/identity-notifications) and
-[crates.io](https://crates.io/crates/identity-notifications).**
-
 Motoko:
 
 ```motoko
@@ -42,5 +39,5 @@ notifications::send(
 - **[motoko/](motoko/README.md)** — the Mops package, for a Motoko canister.
 - **[rust/](rust/README.md)** — the crate, for a Rust canister.
 
-Same surface, same behaviour, one design: [DESIGN.md](DESIGN.md). See
-[CONTRIBUTING.md](CONTRIBUTING.md) and [Releasing.md](Releasing.md).
+Same surface, same behaviour. See [CONTRIBUTING.md](CONTRIBUTING.md) and
+[Releasing.md](Releasing.md).
