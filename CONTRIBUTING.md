@@ -31,9 +31,8 @@ A PR that changes `motoko/src` or `rust/src` adds an entry under `## Next` in
 that package's `Changelog.md`; CI checks for it. A change with nothing to tell
 users, such as a refactor or a test, carries the `no-changelog` label instead.
 
-The two libraries follow one design document and are meant to stay in step, so
-a change to how either behaves belongs in both, along with the same test on
-each side.
+The two libraries are meant to stay in step, so a change to how either behaves
+belongs in both, along with the same test on each side.
 
 `motoko/src/Internal/` and `rust/src/internal/` hold the parts worth testing on
 their own — the lane queue, id derivation, the metrics ring, the outbox and the
