@@ -1,6 +1,6 @@
 [package]
 name = "identity-notifications"
-version = "0.3.0"
+version = "0.3.1"
 description = "Notify Internet Identity users from a Motoko canister: one send call, the library handles the rest."
 keywords = [ "internet-identity", "notifications", "web-push", "identity", "icp" ]
 license = "Apache-2.0"

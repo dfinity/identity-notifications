@@ -2,6 +2,11 @@
 
 ## Next
 
+## 0.3.1
+
+* The README links the Rust crate instead of documents that are no longer in
+  the repository.
+
 ## 0.3.0
 
 * Breaking change: depends on `core` 2.6.2, so an app resolves `core` 2.6.2 or
