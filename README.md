@@ -39,5 +39,5 @@ notifications::send(
 - **[motoko/](motoko/README.md)** — the Mops package, for a Motoko canister.
 - **[rust/](rust/README.md)** — the crate, for a Rust canister.
 
-Same surface, same behaviour. See [CONTRIBUTING.md](CONTRIBUTING.md) and
-[Releasing.md](Releasing.md).
+Same surface, same behaviour. See [Releasing.md](Releasing.md) for how each is
+released.

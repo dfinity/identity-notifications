@@ -107,5 +107,5 @@ timers do not survive an upgrade either.
 cargo test
 ```
 
-See [CONTRIBUTING.md](https://github.com/dfinity/identity-notifications/blob/main/CONTRIBUTING.md). `examples/chat` is a chat canister with
-one-to-one and group conversations, built as part of CI.
+`examples/chat` is a chat canister with one-to-one and group conversations,
+built as part of CI.
