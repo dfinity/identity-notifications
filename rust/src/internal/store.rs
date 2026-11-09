@@ -71,6 +71,10 @@ struct Slot {
     lane: u8,
     expires_at: u64,
     due_at: u64,
+    /// Who the notification is for, so a pull is still answerable while the
+    /// entry itself is out with a batch. Absent only in a row written before
+    /// the library had a use for it.
+    recipient: Option<Principal>,
 }
 
 impl Slot {
@@ -126,6 +130,12 @@ impl Storable for Row {
                 bytes.push(slot.lane);
                 bytes.extend_from_slice(&slot.expires_at.to_be_bytes());
                 bytes.extend_from_slice(&slot.due_at.to_be_bytes());
+                // Last, so a row written before it existed still reads.
+                if let Some(recipient) = slot.recipient {
+                    let who = recipient.as_slice();
+                    bytes.push(who.len() as u8);
+                    bytes.extend_from_slice(who);
+                }
             }
         }
         Cow::Owned(bytes)
@@ -167,6 +177,11 @@ impl Storable for Row {
                 lane: bytes[2],
                 expires_at: word(3),
                 due_at: word(11),
+                recipient: bytes
+                    .get(19)
+                    .map(|length| usize::from(*length))
+                    .and_then(|length| bytes.get(20..20 + length))
+                    .map(Principal::from_slice),
             }),
         }
     }
@@ -726,15 +741,19 @@ impl Store {
         self.content.get(&id).map(|StoredContent(content)| content)
     }
 
-    /// Who this notification is for, for as long as there is one. Content and
-    /// entry are released together, so content an app still holds always has
-    /// a recipient to answer for it.
+    /// Who this notification is for, for as long as there is one.
+    ///
+    /// The slot answers while the entry is out with a batch in flight, and the
+    /// entry answers for a slot written before slots carried a recipient. Both
+    /// go when the content does, so content an app still holds always has a
+    /// recipient to answer for it.
     pub fn recipient_of(&self, id: NotificationId) -> Option<Principal> {
         let slot = self.slot_of(id)?;
-        match self.entries.get(&slot.key(id))? {
-            Row::Entry(entry) => Some(entry.recipient),
-            Row::Slot(_) => None,
-        }
+        slot.recipient
+            .or_else(|| match self.entries.get(&slot.key(id)) {
+                Some(Row::Entry(entry)) => Some(entry.recipient),
+                _ => None,
+            })
     }
 
     /// `false` when there is no such notification to have received.
@@ -946,6 +965,7 @@ impl Store {
     fn place(&mut self, entry: Entry, kind: u8, at: u64) {
         let slot = Slot {
             kind,
+            recipient: Some(entry.recipient),
             lane: entry.lane,
             expires_at: entry.expires_at,
             due_at: at,
@@ -1128,6 +1148,31 @@ mod tests {
             "a name the app can no longer recognise is no label at all"
         );
         assert_eq!(store.funnel_id(&named), funnel, "and it is the same funnel");
+    }
+
+    #[test]
+    fn a_slot_says_who_its_notification_is_for_and_an_older_row_still_reads() {
+        let slot = Slot {
+            kind: keys::ACCEPTED,
+            lane: 1,
+            expires_at: 7,
+            due_at: 9,
+            recipient: Some(Principal::from_slice(&[1, 2, 3])),
+        };
+        let row = Row::Slot(slot);
+        let bytes = row.to_bytes().into_owned();
+        assert_eq!(Row::from_bytes(Cow::Owned(bytes.clone())), row);
+
+        // A row written before slots carried a recipient is the same bytes
+        // without one, and the entry it stands for answers for it instead.
+        let Row::Slot(older) = Row::from_bytes(Cow::Owned(bytes[..19].to_vec())) else {
+            panic!("a slot row");
+        };
+        assert_eq!(older.recipient, None);
+        assert_eq!(
+            (older.kind, older.lane, older.expires_at, older.due_at),
+            (slot.kind, slot.lane, slot.expires_at, slot.due_at)
+        );
     }
 
     fn round_trip(content: Content) {
