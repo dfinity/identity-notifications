@@ -726,6 +726,17 @@ impl Store {
         self.content.get(&id).map(|StoredContent(content)| content)
     }
 
+    /// Who this notification is for, for as long as there is one. Content and
+    /// entry are released together, so content an app still holds always has
+    /// a recipient to answer for it.
+    pub fn recipient_of(&self, id: NotificationId) -> Option<Principal> {
+        let slot = self.slot_of(id)?;
+        match self.entries.get(&slot.key(id))? {
+            Row::Entry(entry) => Some(entry.recipient),
+            Row::Slot(_) => None,
+        }
+    }
+
     /// `false` when there is no such notification to have received.
     pub fn holds(&self, id: NotificationId) -> bool {
         self.content.contains_key(&id)

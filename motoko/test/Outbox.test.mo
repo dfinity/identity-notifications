@@ -4,6 +4,12 @@ import Outbox "../src/Internal/Outbox";
 import Principal "mo:core/Principal";
 
 let alice = Principal.fromText("un4fu-tqaaa-aaaab-qadjq-cai");
+let bob = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
+
+func id(added : ?Nat64) : Nat64 = switch added {
+  case (?id) id;
+  case null (0 : Nat64)
+};
 let HOUR = 3_600_000_000_000;
 
 func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high }) : {
@@ -247,4 +253,29 @@ do {
   let batch = o.take(1);
   o.defer(batch[0], 3 * MINUTE);
   assert o.nextDue() == ?(3 * MINUTE)
+};
+
+// Who a notification is for, which is what the endpoints Internet Identity
+// calls check the signed account against: one key sent to two accounts is two
+// notifications, each answerable only to its own.
+do {
+  let o = Outbox.empty();
+  let hers = id(o.add(alice, note("one", ?"k", null), HOUR, 1_000_000, 0));
+  let his = id(o.add(bob, note("one", ?"k", null), HOUR, 1_000_000, 0));
+
+  assert hers != his;
+  switch (o.entryOf(hers)) {
+    case (?entry) assert entry.recipient == alice;
+    case null assert false
+  };
+  switch (o.entryOf(his)) {
+    case (?entry) assert entry.recipient == bob;
+    case null assert false
+  };
+
+  // Content and entry go together, so a pull is never left with content it
+  // cannot name an account for.
+  o.dismiss(alice, "k");
+  switch (o.entryOf(hers)) { case null {}; case (?_) assert false };
+  switch (o.contentOf(hers)) { case null {}; case (?_) assert false }
 }

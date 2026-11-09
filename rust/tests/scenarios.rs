@@ -270,6 +270,39 @@ fn accepted_content_is_kept_until_it_expires_and_no_longer() {
     );
 }
 
+/// What the three endpoints Internet Identity calls check the signed account
+/// against: without it, any holder of a notification-pull delegation for this
+/// app reads every other account's content.
+#[test]
+fn an_accepted_notification_says_which_account_may_pull_it() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.reachable(user(1));
+    world.send(user(0), message("kept", None), HOUR);
+    world.send(user(1), message("kept", None), HOUR);
+    world.flush(HOUR);
+
+    let theirs = identity_notifications::internal::ids::keyed(user(0), "kept");
+    let others = identity_notifications::internal::ids::keyed(user(1), "kept");
+
+    assert_eq!(world.store.recipient_of(theirs), Some(user(0)));
+    assert_eq!(world.store.recipient_of(others), Some(user(1)));
+    assert_ne!(
+        theirs, others,
+        "one key, two accounts, two notifications to keep apart"
+    );
+
+    world.flush(HOUR + RETENTION);
+    assert!(
+        world.store.content_of(theirs).is_none(),
+        "content goes at expiry"
+    );
+    assert!(
+        world.store.recipient_of(theirs).is_none(),
+        "and the recipient with it, so no pull is left unanswerable"
+    );
+}
+
 #[test]
 fn a_campaign_nobody_opens_does_not_accumulate() {
     let mut world = World::new(10_000);
