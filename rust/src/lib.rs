@@ -63,7 +63,7 @@ const BATCH_GUESS: usize = 1_000;
 
 /// Internet Identity's own default, mirrored so the outbox orders and expires
 /// notifications by the window they actually have.
-const II_DEFAULT_RETENTION_NS: u64 = 5 * 60 * 1_000_000_000;
+const II_DEFAULT_RETENTION_NS: u64 = 60 * 60 * 1_000_000_000;
 
 thread_local! {
     /// Everything durable is in stable memory; what is here is the handle to

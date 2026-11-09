@@ -2,6 +2,13 @@
 
 ## Next
 
+* A notification an app sets no `expiresAt` on is now kept for an hour instead
+  of five minutes, matching Internet Identity's own default. The five minutes
+  was the window Internet Identity has to post a wake-up, which is not how long
+  the notification is worth showing: a browser that is woken later still finds
+  the content to show. A deadline past the day Internet Identity keeps one for
+  is cut to that.
+
 ## 0.3.1
 
 * The README links the Rust crate instead of documents that are no longer in
