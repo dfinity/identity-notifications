@@ -4,3 +4,4 @@
 .dfx
 **/*.wasm
 .DS_Store
+.claude
