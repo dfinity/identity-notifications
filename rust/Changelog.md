@@ -2,6 +2,11 @@
 
 ## Next
 
+* A receipt, and a drop after Internet Identity was unreachable twice, count
+  in the hour the notification was sent and in its funnel, like every other
+  step. Funnels report `received`, and an hour no longer shows more received
+  than accepted.
+
 * Security fix: the three endpoints Internet Identity calls now check the
   account its signed caller info names against the notification's recipient.
   Internet Identity gives each consenting browser a pull delegation for its own

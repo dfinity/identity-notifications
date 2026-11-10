@@ -424,3 +424,57 @@ fn an_upgrade_serialises_nothing_and_loses_nothing() {
     assert_eq!(reopened.backlog(), 1, "the outbox survives");
     assert_eq!(reopened.hours().len(), 1, "metrics survive");
 }
+
+fn in_funnel(key: &str, funnel: &str) -> Notification {
+    Notification {
+        funnel: Some(funnel.into()),
+        expires_at: Some(3 * HOUR),
+        ..message(key, None)
+    }
+}
+
+#[test]
+fn a_receipt_counts_in_the_hour_and_funnel_the_notification_came_in() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    let id = world
+        .store
+        .add(
+            user(0),
+            in_funnel("m", "launch"),
+            HOUR + RETENTION,
+            CAPACITY,
+            HOUR,
+        )
+        .expect("added");
+    assert_eq!(world.flush(HOUR).accepted, 1);
+
+    assert!(world.store.mark_received(id));
+    assert!(
+        !world.store.mark_received(id),
+        "a second channel adds nothing"
+    );
+
+    let hours = world.store.hours();
+    assert_eq!(hours.len(), 1, "no bucket for the hour of the receipt");
+    assert_eq!((hours[0].start, hours[0].counts.received), (HOUR, 1));
+    assert_eq!(world.store.funnels()[0].counts.received, 1);
+}
+
+#[test]
+fn a_call_that_never_lands_twice_drops_in_the_hour_and_funnel_it_came_in() {
+    let mut world = World::new(10);
+    world.send(user(0), in_funnel("m", "launch"), HOUR);
+
+    for now in [HOUR, 3 * HOUR - 1] {
+        world.store.promote(now);
+        let batch = world.store.take(10);
+        assert_eq!(batch.len(), 1);
+        flush::apply(&mut world.store, batch, Outcome::Unreachable, now);
+    }
+
+    let hours = world.store.hours();
+    assert_eq!(hours.len(), 1, "no bucket for the hour of the drop");
+    assert_eq!((hours[0].start, hours[0].counts.dropped), (HOUR, 1));
+    assert_eq!(world.store.funnels()[0].counts.dropped, 1);
+}
