@@ -43,7 +43,10 @@ mixin<system>() {
 
   /// Internet Identity's own default, mirrored so the outbox orders and
   /// expires notifications by the window they actually have.
-  let II_DEFAULT_RETENTION : Int = 3_600_000_000_000;
+  ///
+  /// Transient, so an upgraded canister takes the value this version carries.
+  /// A stable one would keep whatever the version that installed it stored.
+  transient let II_DEFAULT_RETENTION : Int = 3_600_000_000_000;
 
   let configured = Config.read<system>();
   transient let randomness = actor "aaaaa-aa" : actor {
