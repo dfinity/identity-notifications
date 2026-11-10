@@ -699,6 +699,7 @@ impl Store {
 
         entry.received = true;
         self.entries.insert(slot.key(id), Row::Entry(entry));
+        self.record_for(&entry, Event::Received, 1);
         true
     }
 

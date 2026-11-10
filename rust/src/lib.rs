@@ -234,12 +234,7 @@ pub fn notification_received(id: NotificationId) {
     if sender_info().is_none() {
         return;
     }
-    let now = time();
-    with_store(|store| {
-        if store.holds(id) && store.mark_received(id) {
-            store.record(now, Event::Received, 1);
-        }
-    });
+    with_store(|store| store.holds(id) && store.mark_received(id));
 }
 
 /// The two endpoints Internet Identity calls: a `query` for the content and an
