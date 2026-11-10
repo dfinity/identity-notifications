@@ -65,7 +65,7 @@ pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
         Outcome::Unreachable => {
             for entry in batch {
                 if !store.park(entry, now) {
-                    store.record(now, Event::Dropped, 1);
+                    store.record_for(&entry, Event::Dropped, 1);
                 }
             }
         }

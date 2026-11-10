@@ -2,6 +2,11 @@
 
 ## Next
 
+* A receipt, and a drop after Internet Identity was unreachable twice, count
+  in the hour the notification was sent and in its funnel, like every other
+  step. Funnels report `received`, and an hour no longer shows more received
+  than accepted.
+
 ## 0.1.1
 
 * The README links the Motoko package instead of documents that are no longer
