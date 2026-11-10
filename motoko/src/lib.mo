@@ -152,14 +152,14 @@ mixin<system>() {
   public shared query func _internet_identity_notification_content(
     id : Nat64
   ) : async ?Types.Content {
-    let ?_ = senderInfo() else return null;
+    let ?_ = senderInfoFor(id) else return null;
     outbox.contentOf(id)
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
   /// devices may still pull it.
   public shared func _internet_identity_notification_received(id : Nat64) : async () {
-    let ?_ = senderInfo() else return;
+    let ?_ = senderInfoFor(id) else return;
     if (not outbox.holds(id)) return;
     if (not outbox.markReceived(id)) return;
     switch (outbox.entryOf(id)) {
@@ -170,12 +170,26 @@ mixin<system>() {
 
   /// Somebody acted on the notification a channel showed them.
   public shared func _internet_identity_notification_opened(id : Nat64) : async () {
-    let ?_ = senderInfo() else return;
+    let ?_ = senderInfoFor(id) else return;
     if (not outbox.markOpened(id)) return;
     switch (outbox.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #opened);
       case null {}
     }
+  };
+
+  /// Internet Identity signed this call's caller info, it names our own
+  /// origin, and this notification is the account's own.
+  ///
+  /// Every holder of a notification-pull delegation for this app satisfies the
+  /// first two on their own account, so the account is what separates them: an
+  /// id is derived from the recipient and a key, so whoever knows both can
+  /// name another account's notification.
+  func senderInfoFor(id : Nat64) : ?CallerInfo.SenderInfo {
+    let ?info = senderInfo() else return null;
+    let ?entry = outbox.entryOf(id) else return null;
+    if (entry.recipient != info.account) return null;
+    ?info
   };
 
   /// Internet Identity signed this call's caller info, and it names our own
