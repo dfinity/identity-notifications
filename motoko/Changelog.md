@@ -8,6 +8,15 @@
   account, so until now any user of an app could read, receipt and open every
   other user's notifications from that app. An id is derived from the recipient
   and the key, so naming someone else's notification took no guessing.
+* A notification an app sets no `expiresAt` on is now kept for an hour instead
+  of five minutes, matching Internet Identity's own default. The five minutes
+  was the window Internet Identity has to post a wake-up, which is not how long
+  the notification is worth showing: a browser that is woken later still finds
+  the content to show. A deadline past the day Internet Identity keeps one for
+  is cut to that.
+* An upgraded canister reads its environment variables again, so a changed
+  `notification_sender`, `notification_origin` or `notification_capacity_mb`
+  takes effect on upgrade rather than keeping what the installing version read.
 
 ## 0.3.1
 

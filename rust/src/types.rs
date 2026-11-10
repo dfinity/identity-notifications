@@ -41,8 +41,9 @@ pub struct Notification {
     pub key: Option<String>,
     /// `None` is [`Urgency::Normal`].
     pub urgency: Option<Urgency>,
-    /// `None` is Internet Identity's default retention, which is also its
-    /// ceiling. Nanoseconds since the epoch.
+    /// How long this notification is worth showing. `None` is Internet
+    /// Identity's default retention of an hour, and a deadline past the day it
+    /// keeps one for is cut to that. Nanoseconds since the epoch.
     pub expires_at: Option<u64>,
     /// Which funnel to count this notification in, on top of the hour it was
     /// sent in. One campaign, one kind of notification — whatever the app wants

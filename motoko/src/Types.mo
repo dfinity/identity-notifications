@@ -21,8 +21,9 @@ module {
     key : ?Text;
     /// `null` is `#normal`.
     urgency : ?Urgency;
-    /// `null` is Internet Identity's default retention, which is also its
-    /// ceiling.
+    /// How long this notification is worth showing. `null` is Internet
+    /// Identity's default retention of an hour, and a deadline past the day it
+    /// keeps one for is cut to that.
     expiresAt : ?Time.Time;
     /// Which funnel to count this notification in, on top of the hour it was
     /// sent in. One campaign, one kind of notification — whatever the app wants
