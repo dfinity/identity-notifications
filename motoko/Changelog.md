@@ -2,6 +2,8 @@
 
 ## Next
 
+## 0.3.2
+
 * Security fix: the three endpoints Internet Identity calls now check the
   account its signed caller info names against the notification's recipient.
   Internet Identity gives each consenting browser a pull delegation for its own

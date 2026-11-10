@@ -2,6 +2,8 @@
 
 ## Next
 
+## 0.1.2
+
 * A receipt, and a drop after Internet Identity was unreachable twice, count
   in the hour the notification was sent and in its funnel, like every other
   step. Funnels report `received`, and an hour no longer shows more received
