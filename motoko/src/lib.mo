@@ -33,22 +33,24 @@ import Types "Types";
 /// `notification_origin`, and optionally `notification_capacity_mb`.
 mixin<system>() {
 
+  // Transient, so an upgraded canister takes the values this version carries.
+  // Stable ones would keep whatever the version that installed it stored.
+
   /// How long sends accumulate before one call carries them. Urgency decides
   /// which lane drains first, not call timing, so everything waits for it.
-  let COALESCE : Nat = 2_000_000_000;
+  transient let COALESCE : Nat = 2_000_000_000;
 
   /// What Internet Identity accepts in one call, until `TooManyNotifications`
   /// says otherwise.
-  let BATCH_GUESS : Nat = 1_000;
+  transient let BATCH_GUESS : Nat = 1_000;
 
   /// Internet Identity's own default, mirrored so the outbox orders and
   /// expires notifications by the window they actually have.
-  ///
-  /// Transient, so an upgraded canister takes the value this version carries.
-  /// A stable one would keep whatever the version that installed it stored.
   transient let II_DEFAULT_RETENTION : Int = 3_600_000_000_000;
 
-  let configured = Config.read<system>();
+  /// Read again on an upgrade, so a canister takes the environment it came
+  /// back with.
+  transient let configured = Config.read<system>();
   transient let randomness = actor "aaaaa-aa" : actor {
     raw_rand : () -> async Blob
   };

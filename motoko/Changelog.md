@@ -8,6 +8,9 @@
   the notification is worth showing: a browser that is woken later still finds
   the content to show. A deadline past the day Internet Identity keeps one for
   is cut to that.
+* An upgraded canister reads its environment variables again, so a changed
+  `notification_sender`, `notification_origin` or `notification_capacity_mb`
+  takes effect on upgrade rather than keeping what the installing version read.
 
 ## 0.3.1
 
