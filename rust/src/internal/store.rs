@@ -588,6 +588,7 @@ impl Store {
                     {
                         Some((key, Row::Entry(entry))) => {
                             self.entries.remove(&key);
+                            self.keep_recipient(&entry);
                             taken.push(entry);
                             progressed = true;
                         }
@@ -740,6 +741,26 @@ impl Store {
 
     pub fn content_of(&self, id: NotificationId) -> Option<Content> {
         self.content.get(&id).map(|StoredContent(content)| content)
+    }
+
+    /// Puts the recipient on the slot of an entry about to leave, for a slot
+    /// written before slots carried one. The entry answered for those, and it
+    /// is the entry that a batch takes away, so without this a pull landing
+    /// while that batch is in flight has nothing left to read.
+    fn keep_recipient(&mut self, entry: &Entry) {
+        let Some(slot) = self.slot_of(entry.id) else {
+            return;
+        };
+        if slot.recipient.is_some() {
+            return;
+        }
+        self.entries.insert(
+            EntryKey::slot(entry.id),
+            Row::Slot(Slot {
+                recipient: Some(entry.recipient),
+                ..slot
+            }),
+        );
     }
 
     /// Who this notification is for, for as long as there is one.
@@ -1279,6 +1300,32 @@ mod tests {
             urgency,
             ..Default::default()
         }
+    }
+
+    /// A row an earlier version wrote carries no recipient, and the entry that
+    /// answered for it is what a batch takes away.
+    #[test]
+    fn a_row_written_before_slots_carried_a_recipient_still_answers_mid_batch() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("one", Some("k"), None), HOUR, ROOMY, 0)
+            .expect("room for it");
+        let slot = store.slot_of(id).expect("a slot");
+        store.entries.insert(
+            EntryKey::slot(id),
+            Row::Slot(Slot {
+                recipient: None,
+                ..slot
+            }),
+        );
+
+        assert_eq!(store.take(10).len(), 1, "the entry leaves with the batch");
+
+        assert_eq!(
+            store.recipient_of(id),
+            Some(alice()),
+            "and the slot answers in its place"
+        );
     }
 
     #[test]
