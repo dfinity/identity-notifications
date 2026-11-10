@@ -270,6 +270,73 @@ fn accepted_content_is_kept_until_it_expires_and_no_longer() {
     );
 }
 
+/// What the three endpoints Internet Identity calls check the signed account
+/// against: without it, any holder of a notification-pull delegation for this
+/// app reads every other account's content.
+#[test]
+fn an_accepted_notification_says_which_account_may_pull_it() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.reachable(user(1));
+    world.send(user(0), message("kept", None), HOUR);
+    world.send(user(1), message("kept", None), HOUR);
+    world.flush(HOUR);
+
+    let theirs = identity_notifications::internal::ids::keyed(user(0), "kept");
+    let others = identity_notifications::internal::ids::keyed(user(1), "kept");
+
+    assert_eq!(world.store.recipient_of(theirs), Some(user(0)));
+    assert_eq!(world.store.recipient_of(others), Some(user(1)));
+    assert_ne!(
+        theirs, others,
+        "one key, two accounts, two notifications to keep apart"
+    );
+
+    world.flush(HOUR + RETENTION);
+    assert!(
+        world.store.content_of(theirs).is_none(),
+        "content goes at expiry"
+    );
+    assert!(
+        world.store.recipient_of(theirs).is_none(),
+        "and the recipient with it, so no pull is left unanswerable"
+    );
+}
+
+/// A batch in flight has its entries out of the map while the call to Internet
+/// Identity is awaited, and an already accepted notification resent under the
+/// same key goes back out in one. A channel pulling in that window is asking
+/// about content the app still holds, so it has to be answered.
+#[test]
+fn a_notification_out_with_a_batch_still_says_who_it_is_for() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.send(user(0), message("kept", None), HOUR);
+    world.flush(HOUR);
+
+    let id = identity_notifications::internal::ids::keyed(user(0), "kept");
+    world.send(user(0), message("kept", None), HOUR);
+
+    let batch = world.store.take(world.batch_limit);
+    assert_eq!(
+        batch.len(),
+        1,
+        "the resent notification is out with a batch"
+    );
+    assert!(
+        world.store.content_of(id).is_some(),
+        "and its content is still there to pull"
+    );
+    assert_eq!(
+        world.store.recipient_of(id),
+        Some(user(0)),
+        "so the pull is answered rather than dropped as nothing"
+    );
+
+    flush::apply(&mut world.store, batch, Outcome::Answered(Vec::new()), HOUR);
+    assert_eq!(world.store.recipient_of(id), Some(user(0)));
+}
+
 #[test]
 fn a_campaign_nobody_opens_does_not_accumulate() {
     let mut world = World::new(10_000);

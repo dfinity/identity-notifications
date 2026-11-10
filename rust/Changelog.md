@@ -7,6 +7,13 @@
   step. Funnels report `received`, and an hour no longer shows more received
   than accepted.
 
+* Security fix: the three endpoints Internet Identity calls now check the
+  account its signed caller info names against the notification's recipient.
+  Internet Identity gives each consenting browser a pull delegation for its own
+  account, so until now any user of an app could read, receipt and open every
+  other user's notifications from that app. An id is derived from the recipient
+  and the key, so naming someone else's notification took no guessing.
+
 ## 0.1.1
 
 * The README links the Motoko package instead of documents that are no longer

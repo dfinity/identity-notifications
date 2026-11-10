@@ -189,7 +189,7 @@ pub fn set_sender(sender: Option<Principal>) {
 
 /// Records that somebody acted on the notification a channel showed them.
 pub fn notification_opened(id: NotificationId) {
-    if sender_info().is_none() {
+    if sender_info_for(id).is_none() {
         return;
     }
     with_store(|store| store.mark_opened(id));
@@ -225,13 +225,13 @@ pub fn metrics() -> Metrics {
 /// Answers Internet Identity's content pull, for an app that would rather
 /// declare the endpoint itself than use [`endpoints!`].
 pub fn notification_content(id: NotificationId) -> Option<Content> {
-    sender_info()?;
+    sender_info_for(id)?;
     with_store(|store| store.content_of(id)).flatten()
 }
 
 /// Records Internet Identity's receipt.
 pub fn notification_received(id: NotificationId) {
-    if sender_info().is_none() {
+    if sender_info_for(id).is_none() {
         return;
     }
     with_store(|store| store.holds(id) && store.mark_received(id));
@@ -277,6 +277,19 @@ fn sender(config: &Config) -> Option<Principal> {
 
 fn note(why: Misconfigured, now: u64) {
     with_store(|store| store.note(why, now));
+}
+
+/// Internet Identity signed this call's caller info, it names our own origin,
+/// and this notification is the account's own.
+///
+/// Every holder of a notification-pull delegation for this app satisfies the
+/// first two on their own account, so the account is what separates them: an
+/// id is derived from the recipient and a key, so whoever knows both can name
+/// another account's notification.
+fn sender_info_for(id: NotificationId) -> Option<SenderInfo> {
+    let info = sender_info()?;
+    let recipient = with_store(|store| store.recipient_of(id)).flatten()?;
+    (recipient == info.account).then_some(info)
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
