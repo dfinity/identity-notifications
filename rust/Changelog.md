@@ -2,6 +2,15 @@
 
 ## Next
 
+* `dismiss` keeps a notification Internet Identity already took, marked
+  `dismissed` in the new field of `Content`, until it expires, instead of
+  deleting it. A device woken for it then leaves what is on screen alone
+  rather than showing a generic notification for content it could not find.
+  Only the recipient reads a dismissed notification; Internet Identity's pull
+  finds none, as before. One still waiting in the outbox is never sent, as
+  before.
+* Breaking change: `Content` has a new field, `dismissed`, so code that builds
+  one names it too.
 * A notification can carry `metadata`, app-defined text for the app's own
   service worker, such as the id of the user who sent a message so it can draw
   their avatar. It is stored with the content and returned by

@@ -195,6 +195,9 @@ pub struct StoredContent(pub Content);
 /// url an app may send, and reads back as the empty string it wrote.
 const NO_URL: u32 = u32::MAX;
 
+/// Stands in for metadata the app did not give, where a dismissal follows it.
+const NO_METADATA: u32 = u32::MAX;
+
 /// A length and then that many bytes.
 fn push_field(bytes: &mut Vec<u8>, field: &[u8]) {
     bytes.extend_from_slice(&(field.len() as u32).to_be_bytes());
@@ -228,6 +231,7 @@ impl Storable for StoredContent {
             body,
             url,
             metadata,
+            dismissed,
         } = &self.0;
         let mut bytes = Vec::with_capacity(
             16 + title.len()
@@ -241,10 +245,18 @@ impl Storable for StoredContent {
             Some(url) => push_field(&mut bytes, url.as_bytes()),
             None => bytes.extend_from_slice(&NO_URL.to_be_bytes()),
         }
-        // Last, and only when there is some: a row written before content
-        // carried metadata ends at the url, and reads back without any.
-        if let Some(metadata) = metadata {
-            push_field(&mut bytes, metadata.as_bytes());
+        // After the url, and only when there is some or a dismissal follows: a
+        // row written before content carried metadata ends at the url, and
+        // reads back without any.
+        match metadata {
+            Some(metadata) => push_field(&mut bytes, metadata.as_bytes()),
+            None if *dismissed => bytes.extend_from_slice(&NO_METADATA.to_be_bytes()),
+            None => {}
+        }
+        // Last, and only when set: a row written before a dismissal kept its
+        // content reads back as not dismissed.
+        if *dismissed {
+            bytes.push(1);
         }
         Cow::Owned(bytes)
     }
@@ -261,15 +273,19 @@ impl Storable for StoredContent {
         let body = take_text(&mut rest, body_len);
         let url_len = take_len(&mut rest);
         let url = (url_len != NO_URL).then(|| take_text(&mut rest, url_len));
-        let metadata = (!rest.is_empty()).then(|| {
+        let metadata = if rest.is_empty() {
+            None
+        } else {
             let metadata_len = take_len(&mut rest);
-            take_text(&mut rest, metadata_len)
-        });
+            (metadata_len != NO_METADATA).then(|| take_text(&mut rest, metadata_len))
+        };
+        let dismissed = rest.first() == Some(&1);
         StoredContent(Content {
             title,
             body,
             url,
             metadata,
+            dismissed,
         })
     }
 }
@@ -497,6 +513,7 @@ impl Store {
             body: notification.body,
             url: notification.url,
             metadata: notification.metadata,
+            dismissed: false,
         };
         let size = size_of_content(&content);
 
@@ -684,10 +701,15 @@ impl Store {
                 self.unplace(entry.id);
                 self.release(entry.id);
                 expired += 1;
-            } else if self.content.contains_key(&entry.id) {
+            } else if self
+                .content
+                .get(&entry.id)
+                .is_some_and(|StoredContent(content)| !content.dismissed)
+            {
                 live.push(entry);
             } else {
                 self.unplace(entry.id);
+                self.release(entry.id);
             }
         }
 
@@ -717,12 +739,24 @@ impl Store {
         }
     }
 
-    /// The app says this no longer needs anyone's attention: it leaves the
-    /// outbox, and its content goes so a pull finds nothing.
+    /// The app says this no longer needs anyone's attention. Still waiting in
+    /// the outbox, it leaves it and its content goes. Out with a batch or
+    /// accepted, Internet Identity may wake a device for it, so its content
+    /// stays, marked dismissed, until it expires: the device that pulls it
+    /// leaves it alone rather than showing it.
     pub fn dismiss(&mut self, recipient: Principal, key: &str) {
         let id = ids::keyed(recipient, key);
-        self.unplace(id);
-        self.release(id);
+        let Some(slot) = self.slot_of(id) else { return };
+        let is_waiting = slot.queued() && self.entries.contains_key(&slot.key(id));
+        if is_waiting {
+            self.unplace(id);
+            self.release(id);
+            return;
+        }
+        if let Some(StoredContent(mut content)) = self.content.get(&id) {
+            content.dismissed = true;
+            self.content.insert(id, StoredContent(content));
+        }
     }
 
     /// Whether this is the first channel to report showing the notification.
@@ -1237,6 +1271,7 @@ mod tests {
             body: "See you at six".into(),
             url: Some("/chats/7".into()),
             metadata: None,
+            dismissed: false,
         });
     }
 
@@ -1247,6 +1282,7 @@ mod tests {
             body: "See you at six".into(),
             url: None,
             metadata: None,
+            dismissed: false,
         });
     }
 
@@ -1257,12 +1293,14 @@ mod tests {
             body: String::new(),
             url: Some(String::new()),
             metadata: None,
+            dismissed: false,
         });
         let missing = StoredContent(Content {
             title: String::new(),
             body: String::new(),
             url: None,
             metadata: None,
+            dismissed: false,
         });
 
         assert_ne!(empty.to_bytes(), missing.to_bytes());
@@ -1280,6 +1318,7 @@ mod tests {
             body: "See you at six".into(),
             url: Some("/chats/7".into()),
             metadata: Some("{\"from\":\"alice\"}".into()),
+            dismissed: false,
         });
     }
 
@@ -1290,6 +1329,7 @@ mod tests {
             body: "See you at six".into(),
             url: None,
             metadata: Some("alice".into()),
+            dismissed: false,
         });
     }
 
@@ -1301,6 +1341,7 @@ mod tests {
                 body: String::new(),
                 url: None,
                 metadata,
+                dismissed: false,
             })
         };
 
@@ -1334,6 +1375,7 @@ mod tests {
                 body: "cde".into(),
                 url: Some("f".into()),
                 metadata: None,
+                dismissed: false,
             })
         );
     }
@@ -1345,6 +1387,7 @@ mod tests {
             body: "Ja — tot dan".into(),
             url: Some("/chats/zes?q=één".into()),
             metadata: None,
+            dismissed: false,
         });
     }
 
@@ -1355,6 +1398,7 @@ mod tests {
             body: "y".repeat(16_384),
             url: Some("z".repeat(1_024)),
             metadata: None,
+            dismissed: false,
         });
     }
 
@@ -1365,6 +1409,7 @@ mod tests {
             body: "cde".into(),
             url: Some("f".into()),
             metadata: None,
+            dismissed: false,
         });
 
         // Three lengths and the bytes they count, and nothing besides.
@@ -1905,5 +1950,88 @@ mod tests {
 
         assert!(store.funnels().is_empty());
         assert_eq!(store.hours()[0].counts.accepted, 1, "its hour still counts");
+    }
+
+    #[test]
+    fn content_round_trips_a_dismissal_with_and_without_metadata() {
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: None,
+            metadata: None,
+            dismissed: true,
+        });
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: Some("/chats/7".into()),
+            metadata: Some("alice".into()),
+            dismissed: true,
+        });
+    }
+
+    #[test]
+    fn a_dismissed_notification_internet_identity_took_stays_readable_as_dismissed() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+        let batch = store.take(10);
+        store.settle(&batch[0]);
+
+        store.dismiss(alice(), "k");
+
+        assert!(store.holds(id), "a device woken for it still pulls it");
+        assert!(store.content_of(id).unwrap().dismissed);
+        store.sweep(HOUR);
+        assert!(!store.holds(id), "gone once it expires");
+    }
+
+    #[test]
+    fn a_notification_dismissed_while_out_with_a_batch_is_accepted_as_dismissed() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+        let batch = store.take(10);
+
+        store.dismiss(alice(), "k");
+        store.settle(&batch[0]);
+
+        assert!(store.content_of(id).unwrap().dismissed);
+    }
+
+    #[test]
+    fn a_dismissed_notification_waiting_for_its_second_attempt_is_never_sent() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+        let batch = store.take(10);
+        store.dismiss(alice(), "k");
+        assert!(store.park(batch[0], 0));
+
+        store.promote(HOUR);
+        let retry = store.take(10);
+        let (live, expired) = store.sendable(retry, MINUTE);
+
+        assert!(live.is_empty());
+        assert_eq!(expired, 0, "a dismissal is not a delivery failure");
+        assert!(!store.holds(id));
+    }
+
+    #[test]
+    fn sending_again_after_a_dismissal_is_a_live_notification() {
+        let mut store = store();
+        let id = store
+            .add(alice(), note("x", Some("k"), None), HOUR, ROOMY, 0)
+            .unwrap();
+        let batch = store.take(10);
+        store.settle(&batch[0]);
+        store.dismiss(alice(), "k");
+
+        store.add(alice(), note("y", Some("k"), None), HOUR, ROOMY, 0);
+
+        assert!(!store.content_of(id).unwrap().dismissed);
     }
 }
