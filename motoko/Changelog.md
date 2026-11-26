@@ -2,6 +2,11 @@
 
 ## Next
 
+* An app's own service worker can now read a notification's content and
+  report it received and opened, as the recipient. `@icp-sdk/auth` calls these
+  endpoints as the signed-in user, without Internet Identity's caller info,
+  where an installed web app delivers its own notifications. Every other caller
+  is still refused.
 * Breaking change: `Types.Misconfigured` has a new case, `#notListedFrontend`,
   so a `switch` over it that names every case needs one more.
 * A frontend that signs in with a `derivationOrigin`, such as one frontend of a

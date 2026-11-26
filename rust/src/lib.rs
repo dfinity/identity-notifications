@@ -37,7 +37,7 @@ pub mod internal;
 pub mod types;
 
 use candid::Principal;
-use ic_cdk::api::{msg_caller_info_data, msg_caller_info_signer, time};
+use ic_cdk::api::{msg_caller, msg_caller_info_data, msg_caller_info_signer, time};
 use ic_cdk::call::Call;
 use ic_cdk_timers::{clear_timer, set_timer, TimerId};
 use ic_stable_structures::memory_manager::MemoryManager;
@@ -190,7 +190,7 @@ pub fn set_sender(sender: Option<Principal>) {
 
 /// Records that somebody acted on the notification a channel showed them.
 pub fn notification_opened(id: NotificationId) {
-    if sender_info_for(id).is_none() {
+    if !is_reader_of(id) {
         return;
     }
     with_store(|store| store.mark_opened(id));
@@ -223,23 +223,27 @@ pub fn metrics() -> Metrics {
     })
 }
 
-/// Answers Internet Identity's content pull, for an app that would rather
+/// Answers a content pull, by Internet Identity or by the recipient's own
+/// service worker, for an app that would rather
 /// declare the endpoint itself than use [`endpoints!`].
 pub fn notification_content(id: NotificationId) -> Option<Content> {
-    sender_info_for(id)?;
+    if !is_reader_of(id) {
+        return None;
+    }
     with_store(|store| store.content_of(id)).flatten()
 }
 
-/// Records Internet Identity's receipt.
+/// Records that a channel showed the notification.
 pub fn notification_received(id: NotificationId) {
-    if sender_info_for(id).is_none() {
+    if !is_reader_of(id) {
         return;
     }
     with_store(|store| store.holds(id) && store.mark_received(id));
 }
 
-/// The two endpoints Internet Identity calls: a `query` for the content and an
-/// `update` for the receipt.
+/// The endpoints a channel calls, Internet Identity or the recipient's own
+/// service worker: a `query` for the content, and an `update` each for the
+/// receipt and the click.
 #[macro_export]
 macro_rules! endpoints {
     () => {
@@ -280,17 +284,19 @@ fn note(why: Misconfigured, now: u64) {
     with_store(|store| store.note(why, now));
 }
 
-/// Internet Identity signed this call's caller info, it names our own origin,
-/// and this notification is the account's own.
+/// Internet Identity pulling this notification for its account, or that
+/// account calling as itself.
 ///
-/// Every holder of a notification-pull delegation for this app satisfies the
-/// first two on their own account, so the account is what separates them: an
-/// id is derived from the recipient and a key, so whoever knows both can name
-/// another account's notification.
-fn sender_info_for(id: NotificationId) -> Option<SenderInfo> {
-    let info = sender_info()?;
-    let recipient = with_store(|store| store.recipient_of(id)).flatten()?;
-    (recipient == info.account).then_some(info)
+/// Every holder of a notification-pull delegation for this app has caller info
+/// for their own account, so the account is what separates them: an id is
+/// derived from the recipient and a key, so whoever knows both can name another
+/// account's notification.
+fn is_reader_of(id: NotificationId) -> bool {
+    let Some(recipient) = with_store(|store| store.recipient_of(id)).flatten() else {
+        return false;
+    };
+    let signed_account = sender_info().map(|info| info.account);
+    internal::caller_info::may_read(recipient, msg_caller(), signed_account)
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
