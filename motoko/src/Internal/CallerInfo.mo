@@ -35,7 +35,13 @@ module {
   /// (`signedAccount`, from the caller info), or the recipient calling as
   /// themselves, as an app's own service worker does with the user's sign-in.
   public func mayRead(recipient : Principal, caller : Principal, signedAccount : ?Principal) : Bool {
-    if (signedAccount == ?recipient) return true;
+    signedAccount == ?recipient or isRecipient(recipient, caller)
+  };
+
+  /// The recipient calling as themselves, as an app's own service worker does.
+  /// Only this caller reads a dismissed notification: Internet Identity shows
+  /// what it pulls.
+  public func isRecipient(recipient : Principal, caller : Principal) : Bool {
     caller == recipient and not caller.isAnonymous()
   };
 

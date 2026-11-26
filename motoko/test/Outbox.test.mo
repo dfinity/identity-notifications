@@ -71,7 +71,7 @@ do {
 };
 
 // An outbox an earlier version kept carries over whole, its content without
-// metadata, and the earlier one is left without content.
+// metadata and not dismissed, and the earlier one is left without content.
 do {
   let before = Outbox.emptyBefore();
   before.content.add(Nat64.compare, 7 : Nat64, { title = "t"; body = "b"; url = ?"u" });
@@ -85,7 +85,8 @@ do {
       title = "t";
       body = "b";
       url = ?"u";
-      metadata = null
+      metadata = null;
+      dismissed = false
     };
     case null assert false
   };
@@ -253,6 +254,69 @@ do {
 };
 
 let MINUTE = 60_000_000_000;
+
+func dismissed(o : Outbox.State, id : Nat64) : Bool = switch (o.contentOf(id)) {
+  case (?content) content.dismissed;
+  case null false
+};
+
+// Dismissed after Internet Identity took it, it stays readable as dismissed for
+// the device woken for it, and goes once it expires.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  o.settle(o.take(10)[0]);
+
+  o.dismiss(alice, "k");
+
+  assert o.holds(x);
+  assert dismissed(o, x);
+  ignore o.sweep(HOUR);
+  assert not o.holds(x)
+};
+
+// Dismissed while out with a batch, it is accepted as dismissed.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  let batch = o.take(10);
+
+  o.dismiss(alice, "k");
+  o.settle(batch[0]);
+
+  assert dismissed(o, x)
+};
+
+// Dismissed while out with a batch and then refused, it is never sent on its
+// second attempt, and that is not a delivery failure.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  let batch = o.take(10);
+  o.dismiss(alice, "k");
+  assert o.park(batch[0], 0);
+
+  o.promote(HOUR);
+  let (live, expired) = o.sendable(o.take(10), MINUTE);
+
+  assert live.size() == 0;
+  assert expired.size() == 0;
+  assert not o.holds(x);
+  assert o.backlog() == 0
+};
+
+// Sending again after a dismissal is a live notification.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  o.settle(o.take(10)[0]);
+  o.dismiss(alice, "k");
+
+  ignore o.add(alice, note("y", ?"k", null), HOUR, 1_000_000, 0);
+
+  assert o.holds(x);
+  assert not dismissed(o, x)
+};
 
 // Nothing refused a deferred notification, so a repeat of its key is given the
 // window it asks for rather than being stuck with the first send's.

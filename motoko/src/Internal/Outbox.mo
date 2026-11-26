@@ -5,6 +5,7 @@ import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
+import Set "mo:core/Set";
 import Blob "mo:core/Blob";
 import Text "mo:core/Text";
 import Time "mo:core/Time";
@@ -17,7 +18,8 @@ import Types "../Types";
 /// A notification is in one of three places: in a lane by urgency while it is
 /// ready to go, parked while it waits for a later attempt, or accepted, where
 /// only its content remains until it expires. `entries` says which, so a
-/// repeat of a key finds it in one look.
+/// repeat of a key finds it in one look. Between `take` and Internet
+/// Identity's answer it is out with a batch, which `inFlight` records.
 module {
 
   let HOUR : Nat = 3_600_000_000_000;
@@ -61,6 +63,8 @@ module {
     accepted : Schedule;
     content : Map.Map<Nat64, Types.Content>;
     entries : Map.Map<Nat64, Entry>;
+    /// Taken from its lane and not yet placed by Internet Identity's answer.
+    inFlight : Set.Set<Nat64>;
     var counter : Nat64;
     var idSeed : Nat64;
     var bytes : Nat;
@@ -73,6 +77,7 @@ module {
     accepted = Map.empty<(Time.Time, Nat64), Entry>();
     content = Map.empty<Nat64, Types.Content>();
     entries = Map.empty<Nat64, Entry>();
+    inFlight = Set.empty<Nat64>();
     var counter = 0;
     var idSeed = 0;
     var bytes = 0;
@@ -116,14 +121,15 @@ module {
     var queued = 0
   };
 
-  /// The outbox an earlier version kept, each content without metadata. The
-  /// lanes, schedules and entries are taken over rather than copied, and
-  /// `before` is left without content, so nothing is held twice. Metadata adds
-  /// nothing to the size of content that has none, so `bytes` carries over.
+  /// The outbox an earlier version kept, each content without metadata and not
+  /// dismissed. The lanes, schedules and entries are taken over rather than
+  /// copied, and `before` is left without content, so nothing is held twice.
+  /// Metadata adds nothing to the size of content that has none, so `bytes`
+  /// carries over.
   public func fromBefore(before : StateBefore) : State {
     let content = Map.empty<Nat64, Types.Content>();
     for ((id, old) in before.content.entries()) {
-      content.add(Nat64.compare, id, { old with metadata = null })
+      content.add(Nat64.compare, id, { old with metadata = null; dismissed = false })
     };
     before.content.clear();
     {
@@ -132,6 +138,7 @@ module {
       accepted = before.accepted;
       content;
       entries = before.entries;
+      inFlight = Set.empty<Nat64>();
       var counter = before.counter;
       var idSeed = before.idSeed;
       var bytes = before.bytes;
@@ -171,7 +178,8 @@ module {
       title = notification.title;
       body = notification.body;
       url = notification.url;
-      metadata = notification.metadata
+      metadata = notification.metadata;
+      dismissed = false
     };
     let size = sizeOf(content);
 
@@ -279,11 +287,19 @@ module {
     null
   };
 
-  public func take(self : State, count : Nat) : [Entry] = self.ready.take<Entry>(WEIGHTS, count, soonestExpiry);
+  /// Up to `count` entries out of their lanes, out with a batch until
+  /// Internet Identity's answer places each one.
+  public func take(self : State, count : Nat) : [Entry] {
+    let batch = self.ready.take<Entry>(WEIGHTS, count, soonestExpiry);
+    for (entry in batch.values()) {
+      self.inFlight.add(Nat64.compare, entry.id)
+    };
+    batch
+  };
 
   /// What a batch may still be sent, and what expired before anything could
   /// carry it, which is its cohort losing one. Anything the app has since
-  /// dismissed is no longer wanted and is neither.
+  /// dismissed is no longer wanted and is neither: it goes, content and all.
   public func sendable(self : State, batch : [Entry], now : Time.Time) : ([Entry], [Entry]) {
     let live = List.empty<Entry>();
     let expired = List.empty<Entry>();
@@ -292,8 +308,10 @@ module {
       if (entry.expiresAt <= now) {
         forget(self, entry.id);
         expired.add(entry)
-      } else if (holds(self, entry.id)) {
+      } else if (isLive(self, entry.id)) {
         live.add(entry)
+      } else {
+        forget(self, entry.id)
       }
     };
 
@@ -312,10 +330,22 @@ module {
     expired.filter<Entry>(func(entry) = not entry.received)
   };
 
-  /// The app says this no longer needs anyone's attention: it leaves the
-  /// outbox, and its content goes so a pull finds nothing.
+  /// The app says this no longer needs anyone's attention. Still waiting in
+  /// the outbox, it leaves it and its content goes. Out with a batch or
+  /// accepted, Internet Identity may wake a device for it, so its content
+  /// stays, marked dismissed, until it expires: the device that pulls it
+  /// leaves it alone rather than showing it.
   public func dismiss(self : State, recipient : Principal, key : Text) {
-    forget(self, Ids.keyed(recipient, key))
+    let id = Ids.keyed(recipient, key);
+    let ?entry = self.entries.get(Nat64.compare, id) else return;
+    if (queued(entry.stage) and not self.inFlight.contains(Nat64.compare, id)) {
+      forget(self, id);
+      return
+    };
+    switch (self.content.get(Nat64.compare, id)) {
+      case (?content) self.content.add(Nat64.compare, id, { content with dismissed = true });
+      case null {}
+    }
   };
 
   /// Whether this is the first channel to report showing the notification.
@@ -358,6 +388,12 @@ module {
   /// Notifications waiting for Internet Identity to accept them.
   public func backlog(self : State) : Nat = self.queued;
 
+  /// Content the app has not dismissed, so still worth sending.
+  func isLive(self : State, id : Nat64) : Bool = switch (self.content.get(Nat64.compare, id)) {
+    case (?content) not content.dismissed;
+    case null false
+  };
+
   /// Once only, from the first flush.
   public func seed(self : State, randomness : Blob) {
     if (self.idSeed == 0) self.idSeed := Ids.seedFrom(randomness)
@@ -380,6 +416,7 @@ module {
       case (#nowhere or #waiting) {}
     };
 
+    self.inFlight.remove(Nat64.compare, entry.id);
     let wasQueued = queued(entry.stage);
     entry.stage := stage;
     entry.dueAt := at;
@@ -408,6 +445,7 @@ module {
       };
       case null {}
     };
+    self.inFlight.remove(Nat64.compare, id);
     release(self, id)
   };
 

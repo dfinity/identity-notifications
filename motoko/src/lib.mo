@@ -122,8 +122,10 @@ mixin<system>() {
       senderOverride := sender
     };
 
-    /// This notification no longer needs anyone's attention. Its content goes,
-    /// so a pull finds nothing and a channel that sweeps can close it.
+    /// This notification no longer needs anyone's attention. One still in the
+    /// outbox is never sent. One Internet Identity already took stays
+    /// readable, marked `dismissed`, until it expires, so a device woken for
+    /// it leaves it alone instead of showing a stand-in.
     public func dismiss(recipient : Principal, key : Text) {
       store.dismiss(recipient, key)
     };
@@ -157,7 +159,11 @@ mixin<system>() {
     id : Nat64
   ) : async ?Types.Content {
     if (not isReaderOf(id, caller)) return null;
-    store.contentOf(id)
+    let ?content = store.contentOf(id) else return null;
+    // Internet Identity shows what it pulls, so a dismissed notification is
+    // answered only to the recipient's own service worker, which leaves it alone.
+    if (content.dismissed and not isRecipientOf(id, caller)) return null;
+    ?content
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
@@ -196,6 +202,11 @@ mixin<system>() {
       case null null
     };
     CallerInfo.mayRead(entry.recipient, caller, signedAccount)
+  };
+
+  func isRecipientOf(id : Nat64, caller : Principal) : Bool {
+    let ?entry = store.entryOf(id) else return false;
+    CallerInfo.isRecipient(entry.recipient, caller)
   };
 
   /// Internet Identity signed this call's caller info, and it names our own

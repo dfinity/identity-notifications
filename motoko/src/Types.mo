@@ -46,7 +46,11 @@ module {
     /// The `metadata` of the `Notification` the app sent, for its own service
     /// worker. Readable only by the recipient, and never shown by Internet
     /// Identity.
-    metadata : ?Text
+    metadata : ?Text;
+    /// The app dismissed it after Internet Identity accepted it, so a device
+    /// woken for it leaves it alone rather than showing it. Only the recipient
+    /// reads a dismissed notification; Internet Identity finds none.
+    dismissed : Bool
   };
 
   /// What became of a set of notifications, counted once each and attributed

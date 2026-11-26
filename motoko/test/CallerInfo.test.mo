@@ -18,4 +18,10 @@ assert CallerInfo.mayRead(account, account, null);
 assert not CallerInfo.mayRead(account, someoneElse, null);
 
 // The anonymous caller reads nothing, even where it is the recipient.
-assert not CallerInfo.mayRead(anonymous, anonymous, null)
+assert not CallerInfo.mayRead(anonymous, anonymous, null);
+
+// A dismissed notification is hidden from Internet Identity, which would show
+// it, and still answered to the recipient's own service worker.
+assert CallerInfo.mayRead(account, someoneElse, ?account) and not CallerInfo.isRecipient(account, someoneElse);
+assert CallerInfo.isRecipient(account, account);
+assert not CallerInfo.isRecipient(anonymous, anonymous)

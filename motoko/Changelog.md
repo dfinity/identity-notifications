@@ -2,6 +2,16 @@
 
 ## Next
 
+* `dismiss` no longer drops a notification Internet Identity already took or
+  is taking. Its content stays until it expires, marked by the new `dismissed`
+  field of `Types.Content`, so a device woken for it pulls it and leaves it
+  alone instead of showing a stand-in. `_internet_identity_notification_content`
+  answers a dismissed notification only to the recipient calling as
+  themselves, as the app's own service worker does, and Internet Identity finds
+  none. One still waiting in the outbox leaves it as before, and one dismissed
+  while it waits for a second attempt is never sent and not counted as
+  dropped. Sending again under its key makes it live again. An upgrade from an
+  earlier version carries content over as not dismissed.
 * A notification can carry `metadata`, app-defined text for the app's own
   service worker, such as the id of the user who sent a message so it can draw
   their avatar. It is stored with the content and returned by
