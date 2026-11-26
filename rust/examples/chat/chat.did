@@ -14,6 +14,10 @@ type Content = record {
   // Identity.
   metadata : opt text;
   body : text;
+  // The app dismissed it after Internet Identity accepted it, so a device
+  // woken for it leaves it alone rather than showing it. Only the recipient
+  // reads a dismissed notification; Internet Identity finds none.
+  dismissed : bool;
 };
 // What became of a set of notifications, counted once each and attributed to
 // where they came in rather than to when each step happened, so the three
