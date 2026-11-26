@@ -4,7 +4,7 @@ import Runtime "mo:core/Runtime";
 import Text "mo:core/Text";
 import Types "../Types";
 
-/// Three environment variables, one of them optional. Read on use, because a
+/// Four environment variables, two of them optional. Read on use, because a
 /// canister's environment does not change under it.
 module {
 
@@ -14,28 +14,67 @@ module {
     /// `null` where the variable is unset, which `setSender` can still answer
     /// for.
     sender : ?Principal;
+    /// The frontend the notifications are sent for.
     origin : Text;
+    /// The application whose users receive them, where `origin` is one of its
+    /// frontends: the derivation origin that frontend signs in with. `null`
+    /// where the variable is unset or empty, and `origin` is the application.
+    derivationOrigin : ?Text;
     capacityBytes : Nat
   };
 
-  /// Missing configuration is reported rather than guessed at.
+  /// The environment variables, each as it is set or `null`.
+  public type Variables = {
+    notification_sender : ?Text;
+    notification_origin : ?Text;
+    notification_derivation_origin : ?Text;
+    notification_capacity_mb : ?Text
+  };
+
+  /// The canister's environment variables, as a configuration.
   public func read<system>() : { #ok : Config; #err : Types.Misconfigured } {
-    let ?origin = Runtime.envVar<system>("notification_origin") else return #err(#origin);
-    if (Text.size(origin) == 0) return #err(#origin);
+    fromVariables({
+      notification_sender = Runtime.envVar<system>("notification_sender");
+      notification_origin = Runtime.envVar<system>("notification_origin");
+      notification_derivation_origin = Runtime.envVar<system>("notification_derivation_origin");
+      notification_capacity_mb = Runtime.envVar<system>("notification_capacity_mb")
+    })
+  };
+
+  /// The variables, as a configuration. Missing configuration is reported
+  /// rather than guessed at.
+  public func fromVariables(variables : Variables) : {
+    #ok : Config;
+    #err : Types.Misconfigured
+  } {
+    let ?origin = nonEmpty(variables.notification_origin) else return #err(#origin);
 
     #ok {
-      sender = switch (Runtime.envVar<system>("notification_sender")) {
+      sender = switch (variables.notification_sender) {
         case (?identity) ?Principal.fromText(identity);
         case null null
       };
       origin;
-      capacityBytes = megabytes<system>() * 1_048_576
+      derivationOrigin = nonEmpty(variables.notification_derivation_origin);
+      capacityBytes = megabytes(variables.notification_capacity_mb) * 1_048_576
     }
   };
 
-  func megabytes<system>() : Nat {
-    switch (Runtime.envVar<system>("notification_capacity_mb")) {
-      case (?value) switch (parse(value)) {
+  /// The application whose users receive the notifications, and the origin
+  /// Internet Identity signs into the caller info of a pull for them.
+  public func applicationOrigin(config : Config) : Text = switch (config.derivationOrigin) {
+    case (?derivationOrigin) derivationOrigin;
+    case null config.origin
+  };
+
+  func nonEmpty(value : ?Text) : ?Text = switch value {
+    case (?text) if (Text.size(text) == 0) null else ?text;
+    case null null
+  };
+
+  func megabytes(value : ?Text) : Nat {
+    switch value {
+      case (?text) switch (parse(text)) {
         case (?mb) mb;
         case null DEFAULT_CAPACITY_MB
       };

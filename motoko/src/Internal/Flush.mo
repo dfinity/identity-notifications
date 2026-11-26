@@ -2,6 +2,7 @@ import Array "mo:core/Array";
 import Int "mo:core/Int";
 import Map "mo:core/Map";
 import Nat "mo:core/Nat";
+import Nat32 "mo:core/Nat32";
 import Nat64 "mo:core/Nat64";
 import Time "mo:core/Time";
 import II "II";
@@ -13,8 +14,11 @@ import Outbox "Outbox";
 module {
 
   public type Outcome = {
-    /// The origin does not publish this canister as one of its senders.
+    /// The application does not publish this canister as one of its senders.
     #notAuthorized;
+    /// The application at the derivation origin does not list the frontend
+    /// among its alternative origins.
+    #frontendNotListed;
     /// The batch was too large, and nothing in it was enqueued.
     #tooMany : Nat;
     /// Sent, with whatever Internet Identity would not take.
@@ -23,8 +27,13 @@ module {
     #unreachable
   };
 
-  public func arg(origin : Text, batch : [Outbox.Entry]) : II.SendNotificationArg = {
+  public func arg(
+    origin : Text,
+    derivationOrigin : ?Text,
+    batch : [Outbox.Entry]
+  ) : II.SendNotificationArg = {
     origin;
+    derivation_origin = derivationOrigin;
     notifications = batch.map<Outbox.Entry, II.Notification>(
       func(entry) = {
         id = entry.id;
@@ -79,12 +88,26 @@ module {
         }
       };
 
-      case (#tooMany(_) or #notAuthorized) {
+      case (#tooMany(_) or #notAuthorized or #frontendNotListed) {
         for (entry in batch.values()) {
           outbox.requeue(entry, now)
         }
       }
     }
+  };
+
+  /// What Internet Identity's answer to a send means for the batch.
+  public func outcomeOf(
+    result : {
+      #Ok : II.SendNotificationResponse;
+      #Err : II.SendNotificationError
+    }
+  ) : Outcome = switch result {
+    case (#Ok(response)) #answered(response.not_accepted);
+    case (#Err(#TooManyNotifications { limit })) #tooMany(limit.toNat());
+    case (#Err(#NoSuchSender)) #notAuthorized;
+    case (#Err(#NoSuchFrontend)) #frontendNotListed;
+    case (#Err(#InternalCanisterError(_))) #unreachable
   };
 
   func urgencyOf(lane : Nat) : { #VeryLow; #Low; #Normal; #High } = switch lane {

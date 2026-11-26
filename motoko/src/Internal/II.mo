@@ -12,7 +12,8 @@ module {
 
   public type SendNotificationArg = {
     origin : Text;
-    notifications : [Notification]
+    notifications : [Notification];
+    derivation_origin : ?Text
   };
 
   public type NotAcceptedReason = {
@@ -33,6 +34,7 @@ module {
 
   public type SendNotificationError = {
     #NoSuchSender;
+    #NoSuchFrontend;
     #TooManyNotifications : { limit : Nat32 };
     #InternalCanisterError : Text
   };

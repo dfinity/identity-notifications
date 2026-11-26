@@ -1,5 +1,4 @@
 import Int "mo:core/Int";
-import Nat32 "mo:core/Nat32";
 import Nat64 "mo:core/Nat64";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
@@ -30,7 +29,8 @@ import Types "Types";
 /// ```
 ///
 /// Configured by environment variables: `notification_sender`,
-/// `notification_origin`, and optionally `notification_capacity_mb`.
+/// `notification_origin`, and optionally `notification_derivation_origin` and
+/// `notification_capacity_mb`.
 mixin<system>() {
 
   // Transient, so an upgraded canister takes the values this version carries.
@@ -193,12 +193,14 @@ mixin<system>() {
   };
 
   /// Internet Identity signed this call's caller info, and it names our own
-  /// origin. Anything else is not ours to answer.
+  /// application: the derivation origin where one is configured, since that is
+  /// the origin a pull delegation is minted for. Anything else is not ours to
+  /// answer.
   func senderInfo() : ?CallerInfo.SenderInfo {
     let #ok(config) = configured else return null;
     let ?signer = sender(config) else return null;
     let ?info = CallerInfo.read(signer) else return null;
-    if (Origin.fold(info.origin) != Origin.fold(config.origin)) return null;
+    if (Origin.fold(info.origin) != Origin.fold(Config.applicationOrigin(config))) return null;
     ?info
   };
 
@@ -280,12 +282,11 @@ mixin<system>() {
 
     flushing := true;
     let outcome = try {
-      switch (await II.service(signer).app_send_notification(Flush.arg(config.origin, batch))) {
-        case (#Ok(response)) #answered(response.not_accepted);
-        case (#Err(#TooManyNotifications { limit })) #tooMany(limit.toNat());
-        case (#Err(#NoSuchSender)) #notAuthorized;
-        case (#Err(#InternalCanisterError(_))) #unreachable
-      }
+      Flush.outcomeOf(
+        await II.service(signer).app_send_notification(
+          Flush.arg(config.origin, config.derivationOrigin, batch)
+        )
+      )
     } catch (_) {
       #unreachable
     };
@@ -294,6 +295,7 @@ mixin<system>() {
     switch outcome {
       case (#tooMany(limit)) batchLimit := limit;
       case (#notAuthorized) note(#notAuthorizedSender);
+      case (#frontendNotListed) note(#notListedFrontend);
       case (_) {}
     };
 
