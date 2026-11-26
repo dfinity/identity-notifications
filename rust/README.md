@@ -89,8 +89,8 @@ canisters:
     settings:
       environment_variables:
         notification_sender:            "rdmx6-jaaaa-aaaaa-aaadq-cai"   # Internet Identity
-        notification_origin:            "https://your-app.icp0.io"
-        notification_derivation_origin: "https://your-suite.icp0.io"    # optional
+        notification_origin:            "https://your-app.icp.net"
+        notification_derivation_origin: "https://your-suite.icp.net"    # optional
         notification_capacity_mb:       "1024"                          # optional
 ```
 
