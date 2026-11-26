@@ -36,7 +36,7 @@ module {
   /// themselves, as an app's own service worker does with the user's sign-in.
   public func mayRead(recipient : Principal, caller : Principal, signedAccount : ?Principal) : Bool {
     if (signedAccount == ?recipient) return true;
-    caller == recipient and not Principal.isAnonymous(caller)
+    caller == recipient and not caller.isAnonymous()
   };
 
   /// `<domain><origin><account>`, each length-prefixed, as Internet Identity

@@ -18,4 +18,4 @@ assert CallerInfo.mayRead(account, account, null);
 assert not CallerInfo.mayRead(account, someoneElse, null);
 
 // The anonymous caller reads nothing, even where it is the recipient.
-assert not CallerInfo.mayRead(anonymous, anonymous, null);
+assert not CallerInfo.mayRead(anonymous, anonymous, null)

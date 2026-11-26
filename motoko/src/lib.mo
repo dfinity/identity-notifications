@@ -149,7 +149,7 @@ mixin<system>() {
 
   /// Called once a channel has a notification to render: by Internet Identity,
   /// or by the app's own service worker as the recipient.
-  public shared ({ caller }) query func _internet_identity_notification_content(
+  public shared query ({ caller }) func _internet_identity_notification_content(
     id : Nat64
   ) : async ?Types.Content {
     if (not isReaderOf(id, caller)) return null;
