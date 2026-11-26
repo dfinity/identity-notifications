@@ -11,15 +11,23 @@ pub enum Outcome {
     Answered(Vec<ii::NotAccepted>),
     /// The batch was too large, and nothing in it was enqueued.
     TooMany(usize),
-    /// The origin does not publish this canister as one of its senders.
+    /// The application does not publish this canister as one of its senders.
     NotAuthorized,
+    /// The application at the derivation origin does not list the frontend
+    /// among its alternative origins.
+    FrontendNotListed,
     /// The call itself failed.
     Unreachable,
 }
 
-pub fn arg(origin: &str, batch: &[Entry]) -> ii::SendNotificationArg {
+pub fn arg(
+    origin: &str,
+    derivation_origin: Option<&str>,
+    batch: &[Entry],
+) -> ii::SendNotificationArg {
     ii::SendNotificationArg {
         origin: origin.to_string(),
+        derivation_origin: derivation_origin.map(str::to_string),
         notifications: batch
             .iter()
             .map(|entry| ii::Notification {
@@ -70,11 +78,26 @@ pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
             }
         }
 
-        Outcome::TooMany(_) | Outcome::NotAuthorized => {
+        Outcome::TooMany(_) | Outcome::NotAuthorized | Outcome::FrontendNotListed => {
             for entry in batch {
                 store.requeue(entry, now);
             }
         }
+    }
+}
+
+/// What Internet Identity's answer to a send means for the batch.
+pub fn outcome_of(result: ii::SendNotificationResult) -> Outcome {
+    match result {
+        ii::SendNotificationResult::Ok(response) => Outcome::Answered(response.not_accepted),
+        ii::SendNotificationResult::Err(error) => match error {
+            ii::SendNotificationError::TooManyNotifications { limit } => {
+                Outcome::TooMany(limit as usize)
+            }
+            ii::SendNotificationError::NoSuchSender => Outcome::NotAuthorized,
+            ii::SendNotificationError::NoSuchFrontend => Outcome::FrontendNotListed,
+            ii::SendNotificationError::InternalCanisterError(_) => Outcome::Unreachable,
+        },
     }
 }
 

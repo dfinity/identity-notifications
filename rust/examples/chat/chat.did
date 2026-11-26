@@ -47,9 +47,12 @@ type Metrics = record {
 type Misconfigured = variant {
   // `notification_origin` is unset or empty.
   Origin;
+  // The application at `notification_derivation_origin` does not list
+  // `notification_origin` among its alternative origins.
+  NotListedFrontend;
   // `notification_sender` is unset or not a principal.
   Sender;
-  // The origin does not publish this canister as one of its senders.
+  // The application does not publish this canister as one of its senders.
   NotAuthorizedSender;
 };
 type MisconfiguredSince = record { why : Misconfigured; since : nat64 };

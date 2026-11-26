@@ -23,6 +23,7 @@ pub struct Notification {
 pub struct SendNotificationArg {
     pub origin: String,
     pub notifications: Vec<Notification>,
+    pub derivation_origin: Option<String>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Copy, Debug)]
@@ -47,6 +48,7 @@ pub struct SendNotificationResponse {
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub enum SendNotificationError {
     NoSuchSender,
+    NoSuchFrontend,
     TooManyNotifications { limit: u32 },
     InternalCanisterError(String),
 }

@@ -30,7 +30,8 @@
 //! ```
 //!
 //! Configured by environment variables: `notification_sender`,
-//! `notification_origin`, and optionally `notification_capacity_mb`.
+//! `notification_origin`, and optionally `notification_derivation_origin` and
+//! `notification_capacity_mb`.
 
 pub mod internal;
 pub mod types;
@@ -293,7 +294,9 @@ fn sender_info_for(id: NotificationId) -> Option<SenderInfo> {
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
-/// origin. Anything else is not ours to answer.
+/// application: the derivation origin where one is configured, since that is
+/// the origin a pull delegation is minted for. Anything else is not ours to
+/// answer.
 fn sender_info() -> Option<SenderInfo> {
     let config = configured().ok()?;
     if Some(msg_caller_info_signer()?) != sender(&config) {
@@ -301,7 +304,8 @@ fn sender_info() -> Option<SenderInfo> {
     }
 
     let info = internal::caller_info::decode(&msg_caller_info_data())?;
-    (internal::origin::fold(&info.origin) == internal::origin::fold(&config.origin)).then_some(info)
+    (internal::origin::fold(&info.origin) == internal::origin::fold(config.application_origin()))
+        .then_some(info)
 }
 
 /// Sets the wake-up for when the outbox next has something to do: the coalesce
@@ -369,7 +373,7 @@ async fn flush_once() {
     }
 
     FLUSHING.set(true);
-    let outcome = send_batch(sender, &config.origin, &batch).await;
+    let outcome = send_batch(sender, &config, &batch).await;
     FLUSHING.set(false);
 
     match &outcome {
@@ -377,6 +381,7 @@ async fn flush_once() {
             with_store(|store| store.set_batch_limit((*limit).max(1)));
         }
         Outcome::NotAuthorized => note(Misconfigured::NotAuthorizedSender, now),
+        Outcome::FrontendNotListed => note(Misconfigured::NotListedFrontend, now),
         _ => {}
     }
 
@@ -385,24 +390,15 @@ async fn flush_once() {
     arm();
 }
 
-async fn send_batch(sender: Principal, origin: &str, batch: &[Entry]) -> Outcome {
-    let arg = flush::arg(origin, batch);
+async fn send_batch(sender: Principal, config: &Config, batch: &[Entry]) -> Outcome {
+    let arg = flush::arg(&config.origin, config.derivation_origin.as_deref(), batch);
 
     let response = Call::unbounded_wait(sender, "app_send_notification")
         .with_arg(&arg)
         .await;
 
     match response.map(|reply| reply.candid::<ii::SendNotificationResult>()) {
-        Ok(Ok(ii::SendNotificationResult::Ok(response))) => {
-            Outcome::Answered(response.not_accepted)
-        }
-        Ok(Ok(ii::SendNotificationResult::Err(error))) => match error {
-            ii::SendNotificationError::TooManyNotifications { limit } => {
-                Outcome::TooMany(limit as usize)
-            }
-            ii::SendNotificationError::NoSuchSender => Outcome::NotAuthorized,
-            ii::SendNotificationError::InternalCanisterError(_) => Outcome::Unreachable,
-        },
+        Ok(Ok(result)) => flush::outcome_of(result),
         Ok(Err(_)) | Err(_) => Outcome::Unreachable,
     }
 }
@@ -428,6 +424,7 @@ mod tests {
         Config {
             sender,
             origin: "https://app.example.com".to_string(),
+            derivation_origin: None,
             capacity_bytes: 1_024,
         }
     }

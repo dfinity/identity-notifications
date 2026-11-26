@@ -81,17 +81,35 @@ notifications::dismiss(recipient, &format!("chat-{from}")); // no longer needs a
 notifications::metrics();                        // the pipeline, hour by hour
 ```
 
-Configuration is three environment variables, one of them optional:
+Configuration is four environment variables, two of them optional:
 
 ```yaml
 canisters:
   - name: backend
     settings:
       environment_variables:
-        notification_sender:      "rdmx6-jaaaa-aaaaa-aaadq-cai"   # Internet Identity
-        notification_origin:      "https://your-app.icp0.io"
-        notification_capacity_mb: "1024"   # optional
+        notification_sender:            "rdmx6-jaaaa-aaaaa-aaadq-cai"   # Internet Identity
+        notification_origin:            "https://your-app.icp0.io"
+        notification_derivation_origin: "https://your-suite.icp0.io"    # optional
+        notification_capacity_mb:       "1024"                          # optional
 ```
+
+| Variable | Meaning |
+| --- | --- |
+| `notification_sender` | The Internet Identity canister to send through. |
+| `notification_origin` | The frontend the notifications are for: the origin users open the app on. |
+| `notification_derivation_origin` | Optional. The derivation origin `notification_origin` signs in with, where it is not its own. |
+| `notification_capacity_mb` | Optional. The most the outbox holds, in megabytes; 1024 by default. |
+
+Leave `notification_derivation_origin` unset when the frontend signs in as
+itself. Set it when the frontend signs in with a `derivationOrigin`, such as one
+frontend of a suite that shares the accounts of another origin: its users are
+that application's users, so Internet Identity delivers to them there, and pulls
+the content as them there. The application must list the frontend in its
+`/.well-known/ii-alternative-origins`, and its sender list must name this
+canister. Where it does not list the frontend, `metrics()` reports
+`NotListedFrontend` under `misconfigured`, and the notifications wait in the
+outbox until it does or they expire.
 
 ## Upgrades
 

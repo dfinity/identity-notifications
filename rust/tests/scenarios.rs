@@ -384,6 +384,65 @@ fn a_batch_refused_as_too_large_is_not_lost() {
 }
 
 #[test]
+fn a_batch_refused_for_an_unlisted_frontend_is_not_lost() {
+    let mut world = World::new(10);
+    for i in 0..3 {
+        world.reachable(user(i));
+        world.send(user(i), message(&format!("m-{i}"), None), HOUR);
+    }
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    let outcome = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchFrontend,
+    ));
+    assert!(matches!(outcome, Outcome::FrontendNotListed));
+    flush::apply(&mut world.store, batch, outcome, HOUR);
+
+    assert_eq!(world.store.backlog(), 3);
+    assert_eq!(world.dropped(), 0);
+    let flushed = world.flush(HOUR + MINUTE);
+    assert_eq!((flushed.sent, flushed.accepted), (3, 3));
+}
+
+#[test]
+fn an_unlisted_sender_and_an_unlisted_frontend_are_told_apart() {
+    let sender = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchSender,
+    ));
+    let frontend = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchFrontend,
+    ));
+
+    assert!(matches!(sender, Outcome::NotAuthorized));
+    assert!(matches!(frontend, Outcome::FrontendNotListed));
+}
+
+#[test]
+fn a_send_names_the_derivation_origin_only_where_one_is_configured() {
+    let mut world = World::new(10);
+    world.send(user(0), message("m", None), HOUR);
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+
+    let own = flush::arg("https://app.example.com", None, &batch);
+    assert_eq!(own.origin, "https://app.example.com");
+    assert_eq!(own.derivation_origin, None);
+
+    let suite = flush::arg(
+        "https://mail.suite.example",
+        Some("https://suite.example"),
+        &batch,
+    );
+    assert_eq!(suite.origin, "https://mail.suite.example");
+    assert_eq!(
+        suite.derivation_origin.as_deref(),
+        Some("https://suite.example")
+    );
+    assert_eq!(suite.notifications.len(), 1);
+}
+
+#[test]
 fn a_call_that_never_lands_keeps_the_notification() {
     let mut world = World::new(10);
     world.reachable(user(0));

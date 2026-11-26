@@ -2,6 +2,18 @@
 
 ## Next
 
+* Breaking change: `Misconfigured` has a new variant, `NotListedFrontend`, so
+  a `match` over it that names every variant needs one more.
+* A frontend that signs in with a `derivationOrigin`, such as one frontend of a
+  suite, can now send notifications to the users of the application at that
+  origin. Set the optional `notification_derivation_origin` variable to it: a
+  send names it as the application the notifications are for, and a pull is
+  answered when Internet Identity's caller info names it, since that is the
+  origin it mints the pull for. Unset, nothing changes. An application that does
+  not list the frontend among its alternative origins is reported as
+  `NotListedFrontend` under `misconfigured`, and its notifications wait in the
+  outbox, as they do for an unlisted sender.
+
 ## 0.1.2
 
 * A receipt, and a drop after Internet Identity was unreachable twice, count

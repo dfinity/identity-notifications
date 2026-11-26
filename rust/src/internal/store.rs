@@ -325,6 +325,7 @@ impl Storable for MetricsRow {
                             Misconfigured::Origin => 0,
                             Misconfigured::Sender => 1,
                             Misconfigured::NotAuthorizedSender => 2,
+                            Misconfigured::NotListedFrontend => 3,
                         });
                         bytes.extend_from_slice(&since.since.to_be_bytes());
                     }
@@ -361,6 +362,7 @@ impl Storable for MetricsRow {
                     why: match take_u8(&mut rest) {
                         0 => Misconfigured::Origin,
                         1 => Misconfigured::Sender,
+                        3 => Misconfigured::NotListedFrontend,
                         _ => Misconfigured::NotAuthorizedSender,
                     },
                     since: take_u64(&mut rest),
@@ -1119,6 +1121,7 @@ mod tests {
             Misconfigured::Origin,
             Misconfigured::Sender,
             Misconfigured::NotAuthorizedSender,
+            Misconfigured::NotListedFrontend,
         ] {
             row_round_trip(MetricsRow::Counters(Meta {
                 counter: 1,

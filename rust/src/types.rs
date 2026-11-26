@@ -110,8 +110,11 @@ pub enum Misconfigured {
     Origin,
     /// `notification_sender` is unset or not a principal.
     Sender,
-    /// The origin does not publish this canister as one of its senders.
+    /// The application does not publish this canister as one of its senders.
     NotAuthorizedSender,
+    /// The application at `notification_derivation_origin` does not list
+    /// `notification_origin` among its alternative origins.
+    NotListedFrontend,
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
