@@ -1,4 +1,5 @@
 import List "mo:core/List";
+import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
 import Outbox "../src/Internal/Outbox";
 import Principal "mo:core/Principal";
@@ -19,7 +20,8 @@ func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high
   key : ?Text;
   urgency : ?{ #veryLow; #low; #normal; #high };
   expiresAt : ?Int;
-  funnel : ?Text
+  funnel : ?Text;
+  metadata : ?Text
 } = {
   title;
   body = "b";
@@ -27,7 +29,8 @@ func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high
   key;
   urgency;
   expiresAt = null;
-  funnel = null
+  funnel = null;
+  metadata = null
 };
 
 // The same key is the same notification: the second send replaces the first.
@@ -41,6 +44,53 @@ do {
     case (?content) assert content.title == "two";
     case null assert false
   }
+};
+
+// Metadata is kept with the content, for the recipient's service worker.
+do {
+  let o = Outbox.empty();
+  let added = o.add(alice, { note("x", ?"k", null) with metadata = ?"alice" }, HOUR, 1_000_000, 0);
+
+  switch (o.contentOf(id(added))) {
+    case (?content) assert content.metadata == ?"alice";
+    case null assert false
+  }
+};
+
+// Metadata counts toward the ceiling like the title and body do.
+do {
+  let o = Outbox.empty();
+  // Room for the notification on its own, and not for its metadata too.
+  let tiny = 100;
+  let heavy = {
+    note("x", ?"x", null) with metadata = ?"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+  };
+
+  assert o.add(alice, heavy, HOUR, tiny, 0) == null;
+  assert o.add(alice, note("x", ?"x", null), HOUR, tiny, 0) != null
+};
+
+// An outbox an earlier version kept carries over whole, its content without
+// metadata, and the earlier one is left without content.
+do {
+  let before = Outbox.emptyBefore();
+  before.content.add(Nat64.compare, 7 : Nat64, { title = "t"; body = "b"; url = ?"u" });
+  before.bytes := 66;
+  before.counter := 3;
+
+  let o = Outbox.fromBefore(before);
+
+  switch (o.contentOf(7)) {
+    case (?content) assert content == {
+      title = "t";
+      body = "b";
+      url = ?"u";
+      metadata = null
+    };
+    case null assert false
+  };
+  assert o.bytes == 66 and o.counter == 3;
+  assert before.content.size() == 0
 };
 
 // Urgency decides the lane, so a high-urgency notification leads a batch.

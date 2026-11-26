@@ -79,6 +79,66 @@ module {
     var queued = 0
   };
 
+  /// Content as versions before metadata kept it.
+  public type ContentBefore = {
+    title : Text;
+    body : Text;
+    url : ?Text
+  };
+
+  /// `State` as versions before metadata kept it. A stable variable keeps its
+  /// type across an upgrade, so the mixin still declares one of these under
+  /// the name those versions gave it, and moves it into a `State` with
+  /// `fromBefore`.
+  public type StateBefore = {
+    ready : LaneQueue.State<Entry>;
+    parked : Schedule;
+    accepted : Schedule;
+    content : Map.Map<Nat64, ContentBefore>;
+    entries : Map.Map<Nat64, Entry>;
+    var counter : Nat64;
+    var idSeed : Nat64;
+    var bytes : Nat;
+    var queued : Nat
+  };
+
+  /// What a fresh install declares under the earlier name, so `fromBefore`
+  /// has an empty outbox to start `State` from.
+  public func emptyBefore() : StateBefore = {
+    ready = LaneQueue.empty<Entry>(LANES);
+    parked = Map.empty<(Time.Time, Nat64), Entry>();
+    accepted = Map.empty<(Time.Time, Nat64), Entry>();
+    content = Map.empty<Nat64, ContentBefore>();
+    entries = Map.empty<Nat64, Entry>();
+    var counter = 0;
+    var idSeed = 0;
+    var bytes = 0;
+    var queued = 0
+  };
+
+  /// The outbox an earlier version kept, each content without metadata. The
+  /// lanes, schedules and entries are taken over rather than copied, and
+  /// `before` is left without content, so nothing is held twice. Metadata adds
+  /// nothing to the size of content that has none, so `bytes` carries over.
+  public func fromBefore(before : StateBefore) : State {
+    let content = Map.empty<Nat64, Types.Content>();
+    for ((id, old) in before.content.entries()) {
+      content.add(Nat64.compare, id, { old with metadata = null })
+    };
+    before.content.clear();
+    {
+      ready = before.ready;
+      parked = before.parked;
+      accepted = before.accepted;
+      content;
+      entries = before.entries;
+      var counter = before.counter;
+      var idSeed = before.idSeed;
+      var bytes = before.bytes;
+      var queued = before.queued
+    }
+  };
+
   public func lane(urgency : ?Types.Urgency) : Nat = switch urgency {
     case (?#high) 0;
     case (null or ?#normal) 1;
@@ -110,7 +170,8 @@ module {
     let content : Types.Content = {
       title = notification.title;
       body = notification.body;
-      url = notification.url
+      url = notification.url;
+      metadata = notification.metadata
     };
     let size = sizeOf(content);
 
@@ -399,5 +460,7 @@ module {
 
   func sizeOf(content : Types.Content) : Nat = Text.size(content.title) + Text.size(content.body) + (
     switch (content.url) { case (?u) Text.size(u); case null 0 }
+  ) + (
+    switch (content.metadata) { case (?m) Text.size(m); case null 0 }
   ) + 64
 }

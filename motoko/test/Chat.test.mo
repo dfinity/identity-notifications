@@ -51,7 +51,8 @@ func message(key : Text, urgency : ?Types.Urgency, expiresAt : ?Int) : Types.Not
   key = ?key;
   urgency;
   expiresAt;
-  funnel = null
+  funnel = null;
+  metadata = null
 };
 
 func send(w : World, to : Principal, note : Types.Notification, now : Int) {

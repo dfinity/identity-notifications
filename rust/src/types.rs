@@ -51,6 +51,10 @@ pub struct Notification {
     /// forgotten, so a label per notification is an unbounded set of
     /// one-notification funnels.
     pub funnel: Option<String>,
+    /// App-defined data for the app's own service worker, such as the id of
+    /// the user who sent a message so it can draw their avatar. Readable only
+    /// by the recipient, and never shown by Internet Identity.
+    pub metadata: Option<String>,
 }
 
 /// What a channel pulls back. The rest of a [`Notification`] never leaves this
@@ -60,6 +64,10 @@ pub struct Content {
     pub title: String,
     pub body: String,
     pub url: Option<String>,
+    /// The [`Notification::metadata`] the app sent, for its own service
+    /// worker. Readable only by the recipient, and never shown by Internet
+    /// Identity.
+    pub metadata: Option<String>,
 }
 
 /// What became of a set of notifications, counted once each and attributed to

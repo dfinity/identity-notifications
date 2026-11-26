@@ -2,6 +2,13 @@
 
 ## Next
 
+* A notification can carry `metadata`, app-defined text for the app's own
+  service worker, such as the id of the user who sent a message so it can draw
+  their avatar. It is stored with the content and returned by
+  `_internet_identity_notification_content` in the new `metadata` field of
+  `Content`, so only the recipient reads it, and Internet Identity never shows
+  it. It counts toward `notification_capacity_mb` like the title, body and url.
+  Content stored by an earlier version reads back without metadata.
 * An app's own service worker can now read a notification's content and
   report it received and opened, as the recipient. `@icp-sdk/auth` calls these
   endpoints as the signed-in user, without Internet Identity's caller info,

@@ -6,7 +6,15 @@ type Bucket = record {
 };
 // What a channel pulls back. The rest of a [`Notification`] never leaves this
 // canister.
-type Content = record { url : opt text; title : text; body : text };
+type Content = record {
+  url : opt text;
+  title : text;
+  // The [`Notification::metadata`] the app sent, for its own service
+  // worker. Readable only by the recipient, and never shown by Internet
+  // Identity.
+  metadata : opt text;
+  body : text;
+};
 // What became of a set of notifications, counted once each and attributed to
 // where they came in rather than to when each step happened, so the three
 // stages read as one funnel: of `queued`, how many Internet Identity took, of

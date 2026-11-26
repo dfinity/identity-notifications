@@ -223,14 +223,28 @@ impl Storable for StoredContent {
     const BOUND: Bound = Bound::Unbounded;
 
     fn to_bytes(&self) -> Cow<'_, [u8]> {
-        let Content { title, body, url } = &self.0;
-        let mut bytes =
-            Vec::with_capacity(12 + title.len() + body.len() + url.as_ref().map_or(0, String::len));
+        let Content {
+            title,
+            body,
+            url,
+            metadata,
+        } = &self.0;
+        let mut bytes = Vec::with_capacity(
+            16 + title.len()
+                + body.len()
+                + url.as_ref().map_or(0, String::len)
+                + metadata.as_ref().map_or(0, String::len),
+        );
         push_field(&mut bytes, title.as_bytes());
         push_field(&mut bytes, body.as_bytes());
         match url {
             Some(url) => push_field(&mut bytes, url.as_bytes()),
             None => bytes.extend_from_slice(&NO_URL.to_be_bytes()),
+        }
+        // Last, and only when there is some: a row written before content
+        // carried metadata ends at the url, and reads back without any.
+        if let Some(metadata) = metadata {
+            push_field(&mut bytes, metadata.as_bytes());
         }
         Cow::Owned(bytes)
     }
@@ -247,7 +261,16 @@ impl Storable for StoredContent {
         let body = take_text(&mut rest, body_len);
         let url_len = take_len(&mut rest);
         let url = (url_len != NO_URL).then(|| take_text(&mut rest, url_len));
-        StoredContent(Content { title, body, url })
+        let metadata = (!rest.is_empty()).then(|| {
+            let metadata_len = take_len(&mut rest);
+            take_text(&mut rest, metadata_len)
+        });
+        StoredContent(Content {
+            title,
+            body,
+            url,
+            metadata,
+        })
     }
 }
 
@@ -473,6 +496,7 @@ impl Store {
             title: notification.title,
             body: notification.body,
             url: notification.url,
+            metadata: notification.metadata,
         };
         let size = size_of_content(&content);
 
@@ -1067,8 +1091,11 @@ pub fn lane_of(urgency: Option<crate::types::Urgency>) -> usize {
 }
 
 fn size_of_content(content: &Content) -> u64 {
-    (content.title.len() + content.body.len() + content.url.as_ref().map_or(0, String::len) + 64)
-        as u64
+    (content.title.len()
+        + content.body.len()
+        + content.url.as_ref().map_or(0, String::len)
+        + content.metadata.as_ref().map_or(0, String::len)
+        + 64) as u64
 }
 
 #[cfg(test)]
@@ -1209,6 +1236,7 @@ mod tests {
             title: "New message".into(),
             body: "See you at six".into(),
             url: Some("/chats/7".into()),
+            metadata: None,
         });
     }
 
@@ -1218,6 +1246,7 @@ mod tests {
             title: "New message".into(),
             body: "See you at six".into(),
             url: None,
+            metadata: None,
         });
     }
 
@@ -1227,11 +1256,13 @@ mod tests {
             title: String::new(),
             body: String::new(),
             url: Some(String::new()),
+            metadata: None,
         });
         let missing = StoredContent(Content {
             title: String::new(),
             body: String::new(),
             url: None,
+            metadata: None,
         });
 
         assert_ne!(empty.to_bytes(), missing.to_bytes());
@@ -1243,11 +1274,77 @@ mod tests {
     }
 
     #[test]
+    fn content_round_trips_its_metadata() {
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: Some("/chats/7".into()),
+            metadata: Some("{\"from\":\"alice\"}".into()),
+        });
+    }
+
+    #[test]
+    fn content_round_trips_metadata_without_a_url() {
+        round_trip(Content {
+            title: "New message".into(),
+            body: "See you at six".into(),
+            url: None,
+            metadata: Some("alice".into()),
+        });
+    }
+
+    #[test]
+    fn empty_metadata_is_not_missing_metadata() {
+        let content = |metadata| {
+            StoredContent(Content {
+                title: String::new(),
+                body: String::new(),
+                url: None,
+                metadata,
+            })
+        };
+
+        assert_eq!(
+            StoredContent::from_bytes(content(Some(String::new())).to_bytes())
+                .0
+                .metadata,
+            Some(String::new())
+        );
+        assert_eq!(
+            StoredContent::from_bytes(content(None).to_bytes())
+                .0
+                .metadata,
+            None
+        );
+    }
+
+    #[test]
+    fn content_written_before_it_carried_metadata_reads_back_without_any() {
+        // Three lengths and the bytes they count, as content was written
+        // before metadata: title "ab", body "cde", url "f".
+        let mut older = Vec::new();
+        push_field(&mut older, b"ab");
+        push_field(&mut older, b"cde");
+        push_field(&mut older, b"f");
+
+        assert_eq!(
+            StoredContent::from_bytes(Cow::Owned(older)),
+            StoredContent(Content {
+                title: "ab".into(),
+                body: "cde".into(),
+                url: Some("f".into()),
+                metadata: None,
+            })
+        );
+    }
+
+    #[test]
     fn content_round_trips_text_that_is_not_ascii() {
         round_trip(Content {
             title: "Diner om zes? 🍝".into(),
             body: "Ja — tot dan".into(),
             url: Some("/chats/zes?q=één".into()),
+            metadata: None,
         });
     }
 
@@ -1257,6 +1354,7 @@ mod tests {
             title: "x".repeat(4_096),
             body: "y".repeat(16_384),
             url: Some("z".repeat(1_024)),
+            metadata: None,
         });
     }
 
@@ -1266,6 +1364,7 @@ mod tests {
             title: "ab".into(),
             body: "cde".into(),
             url: Some("f".into()),
+            metadata: None,
         });
 
         // Three lengths and the bytes they count, and nothing besides.
@@ -1468,6 +1567,27 @@ mod tests {
             .add(alice(), note("x", Some("x"), None), 2 * HOUR, tiny, HOUR)
             .is_some());
         assert!(!store.holds(filler), "it expired an hour ago");
+    }
+
+    #[test]
+    fn metadata_counts_toward_the_ceiling() {
+        let mut store = store();
+        // Room for the notification on its own, and not for its metadata too.
+        let tiny = 100;
+
+        let heavy = Notification {
+            metadata: Some("m".repeat(64)),
+            ..note("x", Some("x"), None)
+        };
+        assert!(store.add(alice(), heavy, HOUR, tiny, 0).is_none());
+        assert!(store
+            .add(alice(), note("x", Some("x"), None), HOUR, tiny, 0)
+            .is_some());
+        assert_eq!(
+            store.meta().bytes,
+            1 + 4 + 64,
+            "title, body and the fixed cost"
+        );
     }
 
     #[test]
