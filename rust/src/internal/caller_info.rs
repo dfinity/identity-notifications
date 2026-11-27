@@ -11,6 +11,18 @@ const DOMAIN: &str = "notification-sender-info";
 
 /// `<domain><origin><account>`, each length-prefixed, as Internet Identity
 /// signs it.
+/// Whether a call may read a notification for `recipient` and report it
+/// received or opened: Internet Identity pulling it for that account
+/// (`signed_account`, from the caller info), or the recipient calling as
+/// themselves, as an app's own service worker does with the user's sign-in.
+pub fn may_read(
+    recipient: Principal,
+    caller: Principal,
+    signed_account: Option<Principal>,
+) -> bool {
+    signed_account == Some(recipient) || (caller == recipient && caller != Principal::anonymous())
+}
+
 pub fn decode(info: &[u8]) -> Option<SenderInfo> {
     let mut rest = info;
 
@@ -59,6 +71,39 @@ mod tests {
 
     fn account() -> Principal {
         Principal::from_text("un4fu-tqaaa-aaaab-qadjq-cai").unwrap()
+    }
+
+    fn someone_else() -> Principal {
+        Principal::from_text("rdmx6-jaaaa-aaaaa-aaadq-cai").unwrap()
+    }
+
+    #[test]
+    fn internet_identity_reads_for_the_account_its_caller_info_names() {
+        assert!(may_read(account(), someone_else(), Some(account())));
+    }
+
+    #[test]
+    fn caller_info_for_another_account_reads_nothing() {
+        assert!(!may_read(account(), someone_else(), Some(someone_else())));
+    }
+
+    #[test]
+    fn the_recipient_reads_its_own_notification_without_caller_info() {
+        assert!(may_read(account(), account(), None));
+    }
+
+    #[test]
+    fn anyone_else_without_caller_info_reads_nothing() {
+        assert!(!may_read(account(), someone_else(), None));
+    }
+
+    #[test]
+    fn the_anonymous_caller_reads_nothing_even_where_it_is_the_recipient() {
+        assert!(!may_read(
+            Principal::anonymous(),
+            Principal::anonymous(),
+            None
+        ));
     }
 
     #[test]

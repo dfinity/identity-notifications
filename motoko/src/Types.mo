@@ -84,8 +84,11 @@ module {
     #origin;
     /// `notification_sender` is unset or not a principal.
     #sender;
-    /// The origin does not publish this canister as one of its senders.
-    #notAuthorizedSender
+    /// The application does not publish this canister as one of its senders.
+    #notAuthorizedSender;
+    /// The application at `notification_derivation_origin` does not list
+    /// `notification_origin` among its alternative origins.
+    #notListedFrontend
   };
 
   public type Metrics = {

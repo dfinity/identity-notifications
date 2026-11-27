@@ -191,8 +191,9 @@ module {
     true
   };
 
-  /// Internet Identity asked for this one later. Not a refusal, so it does not
-  /// spend the second attempt.
+  /// Internet Identity asked for this one later, or the application's
+  /// configuration refused its batch. Not a refusal of the notification, so it
+  /// does not spend the second attempt.
   public func defer(self : State, entry : Entry, retryAfter : Time.Time) {
     place(self, entry, #parked, retryAfter)
   };

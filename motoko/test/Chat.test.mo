@@ -356,6 +356,81 @@ do {
   assert w.outbox.backlog() == 6
 };
 
+// A batch refused because the application does not list the frontend is not
+// lost: nothing was enqueued, so the entries wait for the configuration to be
+// fixed.
+do {
+  let w = world(10);
+  for (i in Nat.range(0, 3)) reachable(w, user(i));
+  for (i in Nat.range(0, 3)) {
+    send(w, user(i), message("m-" # i.toText(), null, null), HOUR)
+  };
+
+  w.outbox.promote(HOUR);
+  let batch = w.outbox.take(10);
+  let outcome = Flush.outcomeOf(#Err(#NoSuchFrontend));
+  switch outcome {
+    case (#frontendNotListed) {};
+    case _ assert false
+  };
+  Flush.apply(w.outbox, w.pipeline, batch, outcome, HOUR);
+
+  assert w.outbox.backlog() == 3;
+  assert totals(w).dropped == 0;
+  // Not again at the next coalesce window.
+  assert flush(w, HOUR + 2_000_000_000).sent == 0;
+  let flushed = flush(w, HOUR + Flush.MISCONFIGURED_RETRY);
+  assert flushed.sent == 3 and flushed.accepted == 3
+};
+
+// A batch refused for an unlisted sender waits without spending its retry: a
+// second refusal drops nothing.
+do {
+  let w = world(10);
+  reachable(w, user(0));
+  send(w, user(0), message("m", null, null), HOUR);
+
+  w.outbox.promote(HOUR);
+  Flush.apply(w.outbox, w.pipeline, w.outbox.take(10), #notAuthorized, HOUR);
+  assert w.outbox.backlog() == 1;
+  assert flush(w, HOUR + 2_000_000_000).sent == 0;
+
+  let later = HOUR + Flush.MISCONFIGURED_RETRY;
+  w.outbox.promote(later);
+  Flush.apply(w.outbox, w.pipeline, w.outbox.take(10), #notAuthorized, later);
+  assert w.outbox.backlog() == 1;
+  assert totals(w).dropped == 0
+};
+
+// An unlisted sender and an unlisted frontend are told apart.
+do {
+  switch (Flush.outcomeOf(#Err(#NoSuchSender))) {
+    case (#notAuthorized) {};
+    case _ assert false
+  };
+  switch (Flush.outcomeOf(#Err(#NoSuchFrontend))) {
+    case (#frontendNotListed) {};
+    case _ assert false
+  }
+};
+
+// A send names the derivation origin only where one is configured.
+do {
+  let w = world(10);
+  send(w, user(0), message("m", null, null), HOUR);
+  w.outbox.promote(HOUR);
+  let batch = w.outbox.take(10);
+
+  let own = Flush.arg("https://app.example.com", null, batch);
+  assert own.origin == "https://app.example.com";
+  assert own.derivation_origin == null;
+
+  let suite = Flush.arg("https://mail.suite.example", ?"https://suite.example", batch);
+  assert suite.origin == "https://mail.suite.example";
+  assert suite.derivation_origin == ?"https://suite.example";
+  assert suite.notifications.size() == 1
+};
+
 // A call that never lands leaves the notification for its second attempt
 // rather than dropping it.
 do {

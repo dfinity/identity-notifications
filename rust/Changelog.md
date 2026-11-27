@@ -2,6 +2,34 @@
 
 ## Next
 
+* An app's own service worker can now read a notification's content and
+  report it received and opened, as the recipient. `@icp-sdk/auth` calls these
+  endpoints as the signed-in user, without Internet Identity's caller info,
+  where an installed web app delivers its own notifications. Every other caller
+  is still refused.
+* Breaking change: `Misconfigured` has a new variant, `NotListedFrontend`, so
+  a `match` over it that names every variant needs one more.
+* A frontend that signs in with a `derivationOrigin`, such as one frontend of a
+  suite, can now send notifications to the users of the application at that
+  origin. Set the optional `notification_derivation_origin` variable to it: a
+  send names it as the application the notifications are for, and a pull is
+  answered when Internet Identity's caller info names it, since that is the
+  origin it mints the pull for. Unset, nothing changes. An application that does
+  not list the frontend among its alternative origins is reported as
+  `NotListedFrontend` under `misconfigured`, and its notifications wait in the
+  outbox, as they do for an unlisted sender.
+* A batch refused for an unlisted sender or an unlisted frontend is tried
+  again a minute later, instead of at the next two-second flush, and still
+  without spending the notification's second attempt. Only the application's
+  operator can fix either, so the calls in between spent cycles on the same
+  answer.
+* `misconfigured` is cleared once Internet Identity accepts a batch, so
+  `metrics()` stops reporting a misconfiguration the operator has fixed.
+* A receipt or an open a channel reports while its notification is in a batch
+  being sent is counted, and kept by the batch's outcome. It was lost, so the
+  notification counted as dropped when it expired, as if no channel had shown
+  it.
+
 ## 0.1.2
 
 * A receipt, and a drop after Internet Identity was unreachable twice, count

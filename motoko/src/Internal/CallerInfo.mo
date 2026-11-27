@@ -30,6 +30,15 @@ module {
     decode(Prim.callerInfoData())
   };
 
+  /// Whether a call may read a notification for `recipient` and report it
+  /// received or opened: Internet Identity pulling it for that account
+  /// (`signedAccount`, from the caller info), or the recipient calling as
+  /// themselves, as an app's own service worker does with the user's sign-in.
+  public func mayRead(recipient : Principal, caller : Principal, signedAccount : ?Principal) : Bool {
+    if (signedAccount == ?recipient) return true;
+    caller == recipient and not caller.isAnonymous()
+  };
+
   /// `<domain><origin><account>`, each length-prefixed, as Internet Identity
   /// signs it.
   public func decode(info : Blob) : ?SenderInfo {

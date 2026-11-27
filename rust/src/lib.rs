@@ -30,13 +30,14 @@
 //! ```
 //!
 //! Configured by environment variables: `notification_sender`,
-//! `notification_origin`, and optionally `notification_capacity_mb`.
+//! `notification_origin`, and optionally `notification_derivation_origin` and
+//! `notification_capacity_mb`.
 
 pub mod internal;
 pub mod types;
 
 use candid::Principal;
-use ic_cdk::api::{msg_caller_info_data, msg_caller_info_signer, time};
+use ic_cdk::api::{msg_caller, msg_caller_info_data, msg_caller_info_signer, time};
 use ic_cdk::call::Call;
 use ic_cdk_timers::{clear_timer, set_timer, TimerId};
 use ic_stable_structures::memory_manager::MemoryManager;
@@ -189,7 +190,7 @@ pub fn set_sender(sender: Option<Principal>) {
 
 /// Records that somebody acted on the notification a channel showed them.
 pub fn notification_opened(id: NotificationId) {
-    if sender_info_for(id).is_none() {
+    if !is_reader_of(id) {
         return;
     }
     with_store(|store| store.mark_opened(id));
@@ -222,23 +223,27 @@ pub fn metrics() -> Metrics {
     })
 }
 
-/// Answers Internet Identity's content pull, for an app that would rather
+/// Answers a content pull, by Internet Identity or by the recipient's own
+/// service worker, for an app that would rather
 /// declare the endpoint itself than use [`endpoints!`].
 pub fn notification_content(id: NotificationId) -> Option<Content> {
-    sender_info_for(id)?;
+    if !is_reader_of(id) {
+        return None;
+    }
     with_store(|store| store.content_of(id)).flatten()
 }
 
-/// Records Internet Identity's receipt.
+/// Records that a channel showed the notification.
 pub fn notification_received(id: NotificationId) {
-    if sender_info_for(id).is_none() {
+    if !is_reader_of(id) {
         return;
     }
     with_store(|store| store.holds(id) && store.mark_received(id));
 }
 
-/// The two endpoints Internet Identity calls: a `query` for the content and an
-/// `update` for the receipt.
+/// The endpoints a channel calls, Internet Identity or the recipient's own
+/// service worker: a `query` for the content, and an `update` each for the
+/// receipt and the click.
 #[macro_export]
 macro_rules! endpoints {
     () => {
@@ -279,21 +284,25 @@ fn note(why: Misconfigured, now: u64) {
     with_store(|store| store.note(why, now));
 }
 
-/// Internet Identity signed this call's caller info, it names our own origin,
-/// and this notification is the account's own.
+/// Internet Identity pulling this notification for its account, or that
+/// account calling as itself.
 ///
-/// Every holder of a notification-pull delegation for this app satisfies the
-/// first two on their own account, so the account is what separates them: an
-/// id is derived from the recipient and a key, so whoever knows both can name
-/// another account's notification.
-fn sender_info_for(id: NotificationId) -> Option<SenderInfo> {
-    let info = sender_info()?;
-    let recipient = with_store(|store| store.recipient_of(id)).flatten()?;
-    (recipient == info.account).then_some(info)
+/// Every holder of a notification-pull delegation for this app has caller info
+/// for their own account, so the account is what separates them: an id is
+/// derived from the recipient and a key, so whoever knows both can name another
+/// account's notification.
+fn is_reader_of(id: NotificationId) -> bool {
+    let Some(recipient) = with_store(|store| store.recipient_of(id)).flatten() else {
+        return false;
+    };
+    let signed_account = sender_info().map(|info| info.account);
+    internal::caller_info::may_read(recipient, msg_caller(), signed_account)
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
-/// origin. Anything else is not ours to answer.
+/// application: the derivation origin where one is configured, since that is
+/// the origin a pull delegation is minted for. Anything else is not ours to
+/// answer.
 fn sender_info() -> Option<SenderInfo> {
     let config = configured().ok()?;
     if Some(msg_caller_info_signer()?) != sender(&config) {
@@ -301,7 +310,7 @@ fn sender_info() -> Option<SenderInfo> {
     }
 
     let info = internal::caller_info::decode(&msg_caller_info_data())?;
-    (internal::origin::fold(&info.origin) == internal::origin::fold(&config.origin)).then_some(info)
+    config.is_application(&info.origin).then_some(info)
 }
 
 /// Sets the wake-up for when the outbox next has something to do: the coalesce
@@ -369,7 +378,7 @@ async fn flush_once() {
     }
 
     FLUSHING.set(true);
-    let outcome = send_batch(sender, &config.origin, &batch).await;
+    let outcome = send_batch(sender, &config, &batch).await;
     FLUSHING.set(false);
 
     match &outcome {
@@ -377,7 +386,11 @@ async fn flush_once() {
             with_store(|store| store.set_batch_limit((*limit).max(1)));
         }
         Outcome::NotAuthorized => note(Misconfigured::NotAuthorizedSender, now),
-        _ => {}
+        Outcome::FrontendNotListed => note(Misconfigured::NotListedFrontend, now),
+        Outcome::Answered(_) => {
+            with_store(|store| store.clear_misconfigured());
+        }
+        Outcome::Unreachable => {}
     }
 
     with_store(|store| flush::apply(store, batch, outcome, now));
@@ -385,24 +398,15 @@ async fn flush_once() {
     arm();
 }
 
-async fn send_batch(sender: Principal, origin: &str, batch: &[Entry]) -> Outcome {
-    let arg = flush::arg(origin, batch);
+async fn send_batch(sender: Principal, config: &Config, batch: &[Entry]) -> Outcome {
+    let arg = flush::arg(&config.origin, config.derivation_origin.as_deref(), batch);
 
     let response = Call::unbounded_wait(sender, "app_send_notification")
         .with_arg(&arg)
         .await;
 
     match response.map(|reply| reply.candid::<ii::SendNotificationResult>()) {
-        Ok(Ok(ii::SendNotificationResult::Ok(response))) => {
-            Outcome::Answered(response.not_accepted)
-        }
-        Ok(Ok(ii::SendNotificationResult::Err(error))) => match error {
-            ii::SendNotificationError::TooManyNotifications { limit } => {
-                Outcome::TooMany(limit as usize)
-            }
-            ii::SendNotificationError::NoSuchSender => Outcome::NotAuthorized,
-            ii::SendNotificationError::InternalCanisterError(_) => Outcome::Unreachable,
-        },
+        Ok(Ok(result)) => flush::outcome_of(result),
         Ok(Err(_)) | Err(_) => Outcome::Unreachable,
     }
 }
@@ -428,6 +432,7 @@ mod tests {
         Config {
             sender,
             origin: "https://app.example.com".to_string(),
+            derivation_origin: None,
             capacity_bytes: 1_024,
         }
     }

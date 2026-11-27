@@ -303,10 +303,10 @@ fn an_accepted_notification_says_which_account_may_pull_it() {
     );
 }
 
-/// A batch in flight has its entries out of the map while the call to Internet
-/// Identity is awaited, and an already accepted notification resent under the
-/// same key goes back out in one. A channel pulling in that window is asking
-/// about content the app still holds, so it has to be answered.
+/// An already accepted notification resent under the same key goes back out in
+/// a batch, and the call to Internet Identity is awaited. A channel pulling in
+/// that window is asking about content the app still holds, so it has to be
+/// answered.
 #[test]
 fn a_notification_out_with_a_batch_still_says_who_it_is_for() {
     let mut world = World::new(10);
@@ -384,6 +384,94 @@ fn a_batch_refused_as_too_large_is_not_lost() {
 }
 
 #[test]
+fn a_batch_refused_for_an_unlisted_frontend_is_not_lost() {
+    let mut world = World::new(10);
+    for i in 0..3 {
+        world.reachable(user(i));
+        world.send(user(i), message(&format!("m-{i}"), None), HOUR);
+    }
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    let outcome = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchFrontend,
+    ));
+    assert!(matches!(outcome, Outcome::FrontendNotListed));
+    flush::apply(&mut world.store, batch, outcome, HOUR);
+
+    assert_eq!(world.store.backlog(), 3);
+    assert_eq!(world.dropped(), 0);
+    assert_eq!(
+        world.flush(HOUR + 2_000_000_000).sent,
+        0,
+        "not again at the next coalesce window"
+    );
+    let flushed = world.flush(HOUR + flush::MISCONFIGURED_RETRY_NS);
+    assert_eq!((flushed.sent, flushed.accepted), (3, 3));
+}
+
+#[test]
+fn a_batch_refused_for_an_unlisted_sender_waits_without_spending_its_retry() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.send(user(0), message("m", None), HOUR);
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    flush::apply(&mut world.store, batch, Outcome::NotAuthorized, HOUR);
+    assert_eq!(world.store.backlog(), 1);
+    assert_eq!(world.flush(HOUR + 2_000_000_000).sent, 0);
+
+    world.store.promote(HOUR + flush::MISCONFIGURED_RETRY_NS);
+    let batch = world.store.take(10);
+    flush::apply(
+        &mut world.store,
+        batch,
+        Outcome::NotAuthorized,
+        HOUR + flush::MISCONFIGURED_RETRY_NS,
+    );
+    assert_eq!(world.store.backlog(), 1, "a second refusal drops nothing");
+    assert_eq!(world.dropped(), 0);
+}
+
+#[test]
+fn an_unlisted_sender_and_an_unlisted_frontend_are_told_apart() {
+    let sender = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchSender,
+    ));
+    let frontend = flush::outcome_of(ii::SendNotificationResult::Err(
+        ii::SendNotificationError::NoSuchFrontend,
+    ));
+
+    assert!(matches!(sender, Outcome::NotAuthorized));
+    assert!(matches!(frontend, Outcome::FrontendNotListed));
+}
+
+#[test]
+fn a_send_names_the_derivation_origin_only_where_one_is_configured() {
+    let mut world = World::new(10);
+    world.send(user(0), message("m", None), HOUR);
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+
+    let own = flush::arg("https://app.example.com", None, &batch);
+    assert_eq!(own.origin, "https://app.example.com");
+    assert_eq!(own.derivation_origin, None);
+
+    let suite = flush::arg(
+        "https://mail.suite.example",
+        Some("https://suite.example"),
+        &batch,
+    );
+    assert_eq!(suite.origin, "https://mail.suite.example");
+    assert_eq!(
+        suite.derivation_origin.as_deref(),
+        Some("https://suite.example")
+    );
+    assert_eq!(suite.notifications.len(), 1);
+}
+
+#[test]
 fn a_call_that_never_lands_keeps_the_notification() {
     let mut world = World::new(10);
     world.reachable(user(0));
@@ -458,6 +546,34 @@ fn a_receipt_counts_in_the_hour_and_funnel_the_notification_came_in() {
     let hours = world.store.hours();
     assert_eq!(hours.len(), 1, "no bucket for the hour of the receipt");
     assert_eq!((hours[0].start, hours[0].counts.received), (HOUR, 1));
+    assert_eq!(world.store.funnels()[0].counts.received, 1);
+}
+
+/// A channel can show a notification and report it while the batch carrying it
+/// is still being sent, such as the earlier push of a key that is being resent.
+/// The receipt and the open count then, once, and the batch's outcome keeps
+/// them, so the notification is not a drop when it expires.
+#[test]
+fn a_receipt_and_an_open_while_the_batch_is_out_are_kept() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.send(user(0), in_funnel("m", "launch"), HOUR);
+    let id = identity_notifications::internal::ids::keyed(user(0), "m");
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    assert_eq!(batch.len(), 1);
+
+    assert!(world.store.mark_received(id), "received mid-batch");
+    assert!(world.store.mark_opened(id), "and opened");
+    flush::apply(&mut world.store, batch, Outcome::Answered(Vec::new()), HOUR);
+
+    assert!(!world.store.mark_received(id), "counted once");
+    assert!(!world.store.mark_opened(id), "counted once");
+
+    world.flush(3 * HOUR);
+    let counts = world.store.hours()[0].counts.clone();
+    assert_eq!((counts.received, counts.opened, counts.dropped), (1, 1, 0));
     assert_eq!(world.store.funnels()[0].counts.received, 1);
 }
 

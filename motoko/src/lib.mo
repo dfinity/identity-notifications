@@ -1,5 +1,4 @@
 import Int "mo:core/Int";
-import Nat32 "mo:core/Nat32";
 import Nat64 "mo:core/Nat64";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
@@ -9,7 +8,6 @@ import Config "Internal/Config";
 import Flush "Internal/Flush";
 import II "Internal/II";
 import Metrics "Internal/Metrics";
-import Origin "Internal/Origin";
 import Outbox "Internal/Outbox";
 import Types "Types";
 
@@ -30,7 +28,8 @@ import Types "Types";
 /// ```
 ///
 /// Configured by environment variables: `notification_sender`,
-/// `notification_origin`, and optionally `notification_capacity_mb`.
+/// `notification_origin`, and optionally `notification_derivation_origin` and
+/// `notification_capacity_mb`.
 mixin<system>() {
 
   // Transient, so an upgraded canister takes the values this version carries.
@@ -147,19 +146,19 @@ mixin<system>() {
     }
   };
 
-  /// Called by Internet Identity, not by the app, once a channel has a
-  /// notification to render.
-  public shared query func _internet_identity_notification_content(
+  /// Called once a channel has a notification to render: by Internet Identity,
+  /// or by the app's own service worker as the recipient.
+  public shared query ({ caller }) func _internet_identity_notification_content(
     id : Nat64
   ) : async ?Types.Content {
-    let ?_ = senderInfoFor(id) else return null;
+    if (not isReaderOf(id, caller)) return null;
     outbox.contentOf(id)
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
   /// devices may still pull it.
-  public shared func _internet_identity_notification_received(id : Nat64) : async () {
-    let ?_ = senderInfoFor(id) else return;
+  public shared ({ caller }) func _internet_identity_notification_received(id : Nat64) : async () {
+    if (not isReaderOf(id, caller)) return;
     if (not outbox.holds(id)) return;
     if (not outbox.markReceived(id)) return;
     switch (outbox.entryOf(id)) {
@@ -169,8 +168,8 @@ mixin<system>() {
   };
 
   /// Somebody acted on the notification a channel showed them.
-  public shared func _internet_identity_notification_opened(id : Nat64) : async () {
-    let ?_ = senderInfoFor(id) else return;
+  public shared ({ caller }) func _internet_identity_notification_opened(id : Nat64) : async () {
+    if (not isReaderOf(id, caller)) return;
     if (not outbox.markOpened(id)) return;
     switch (outbox.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #opened);
@@ -178,27 +177,31 @@ mixin<system>() {
     }
   };
 
-  /// Internet Identity signed this call's caller info, it names our own
-  /// origin, and this notification is the account's own.
+  /// Internet Identity pulling this notification for its account, or that
+  /// account calling as itself.
   ///
-  /// Every holder of a notification-pull delegation for this app satisfies the
-  /// first two on their own account, so the account is what separates them: an
-  /// id is derived from the recipient and a key, so whoever knows both can
-  /// name another account's notification.
-  func senderInfoFor(id : Nat64) : ?CallerInfo.SenderInfo {
-    let ?info = senderInfo() else return null;
-    let ?entry = outbox.entryOf(id) else return null;
-    if (entry.recipient != info.account) return null;
-    ?info
+  /// Every holder of a notification-pull delegation for this app has caller
+  /// info for their own account, so the account is what separates them: an id
+  /// is derived from the recipient and a key, so whoever knows both can name
+  /// another account's notification.
+  func isReaderOf(id : Nat64, caller : Principal) : Bool {
+    let ?entry = outbox.entryOf(id) else return false;
+    let signedAccount = switch (senderInfo()) {
+      case (?info) ?info.account;
+      case null null
+    };
+    CallerInfo.mayRead(entry.recipient, caller, signedAccount)
   };
 
   /// Internet Identity signed this call's caller info, and it names our own
-  /// origin. Anything else is not ours to answer.
+  /// application: the derivation origin where one is configured, since that is
+  /// the origin a pull delegation is minted for. Anything else is not ours to
+  /// answer.
   func senderInfo() : ?CallerInfo.SenderInfo {
     let #ok(config) = configured else return null;
     let ?signer = sender(config) else return null;
     let ?info = CallerInfo.read(signer) else return null;
-    if (Origin.fold(info.origin) != Origin.fold(config.origin)) return null;
+    if (not Config.isApplication(config, info.origin)) return null;
     ?info
   };
 
@@ -280,12 +283,11 @@ mixin<system>() {
 
     flushing := true;
     let outcome = try {
-      switch (await II.service(signer).app_send_notification(Flush.arg(config.origin, batch))) {
-        case (#Ok(response)) #answered(response.not_accepted);
-        case (#Err(#TooManyNotifications { limit })) #tooMany(limit.toNat());
-        case (#Err(#NoSuchSender)) #notAuthorized;
-        case (#Err(#InternalCanisterError(_))) #unreachable
-      }
+      Flush.outcomeOf(
+        await II.service(signer).app_send_notification(
+          Flush.arg(config.origin, config.derivationOrigin, batch)
+        )
+      )
     } catch (_) {
       #unreachable
     };
@@ -294,7 +296,10 @@ mixin<system>() {
     switch outcome {
       case (#tooMany(limit)) batchLimit := limit;
       case (#notAuthorized) note(#notAuthorizedSender);
-      case (_) {}
+      case (#frontendNotListed) note(#notListedFrontend);
+      // Internet Identity took the batch, so nothing is misconfigured any more.
+      case (#answered(_)) misconfigured := null;
+      case (#unreachable) {}
     };
 
     Flush.apply(outbox, pipeline, batch, outcome, now);
