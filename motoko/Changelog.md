@@ -2,6 +2,31 @@
 
 ## Next
 
+* `notification_capacity_mb` counts content in UTF-8 bytes, as Rust does.
+  Title, body, url and metadata were counted in characters, so text that is
+  not ASCII, such as emoji, filled up to four times the memory the ceiling
+  allowed.
+* `dismiss` no longer drops a notification Internet Identity already took or
+  is taking. Its content stays until it expires, marked by the new `dismissed`
+  field of `Types.Content`, so a device woken for it pulls it and leaves it
+  alone instead of showing a stand-in. `_internet_identity_notification_content`
+  answers a dismissed notification only to the recipient calling as
+  themselves, as the app's own service worker does, and Internet Identity finds
+  none. One still waiting in the outbox leaves it as before, and one dismissed
+  while it waits for a second attempt is never sent and not counted as
+  dropped. Sending again under its key makes it live again. An upgrade from an
+  earlier version carries content over as not dismissed.
+* A notification can carry `metadata`, app-defined text for the app's own
+  service worker, such as the id of the user who sent a message so it can draw
+  their avatar. It is stored with the content and returned by
+  `_internet_identity_notification_content` in the new `metadata` field of
+  `Types.Content`, so only the recipient reads it, and Internet Identity never
+  shows it. It counts toward `notification_capacity_mb` like the title, body
+  and url. An upgrade from an earlier version carries the outbox over, its
+  content without metadata.
+* Breaking change: `Types.Notification` has a new field, `metadata`, and a
+  Motoko record has no defaults, so every notification an app builds needs
+  `metadata = null` where it sets none.
 * An app's own service worker can now read a notification's content and
   report it received and opened, as the recipient. `@icp-sdk/auth` calls these
   endpoints as the signed-in user, without Internet Identity's caller info,

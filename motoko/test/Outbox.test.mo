@@ -1,5 +1,7 @@
 import List "mo:core/List";
+import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
+import Ids "../src/Internal/Ids";
 import Outbox "../src/Internal/Outbox";
 import Principal "mo:core/Principal";
 
@@ -19,7 +21,8 @@ func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high
   key : ?Text;
   urgency : ?{ #veryLow; #low; #normal; #high };
   expiresAt : ?Int;
-  funnel : ?Text
+  funnel : ?Text;
+  metadata : ?Text
 } = {
   title;
   body = "b";
@@ -27,7 +30,8 @@ func note(title : Text, key : ?Text, urgency : ?{ #veryLow; #low; #normal; #high
   key;
   urgency;
   expiresAt = null;
-  funnel = null
+  funnel = null;
+  metadata = null
 };
 
 // The same key is the same notification: the second send replaces the first.
@@ -41,6 +45,80 @@ do {
     case (?content) assert content.title == "two";
     case null assert false
   }
+};
+
+// Metadata is kept with the content, for the recipient's service worker.
+do {
+  let o = Outbox.empty();
+  let added = o.add(alice, { note("x", ?"k", null) with metadata = ?"alice" }, HOUR, 1_000_000, 0);
+
+  switch (o.contentOf(id(added))) {
+    case (?content) assert content.metadata == ?"alice";
+    case null assert false
+  }
+};
+
+// Metadata counts toward the ceiling like the title and body do.
+do {
+  let o = Outbox.empty();
+  // Room for the notification on its own, and not for its metadata too.
+  let tiny = 100;
+  let heavy = {
+    note("x", ?"x", null) with metadata = ?"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+  };
+
+  assert o.add(alice, heavy, HOUR, tiny, 0) == null;
+  assert o.add(alice, note("x", ?"x", null), HOUR, tiny, 0) != null
+};
+
+// Text that is not ASCII counts its UTF-8 bytes toward the ceiling, not its
+// characters: 34 emoji are 136 bytes.
+do {
+  let o = Outbox.empty();
+  let tiny = 100;
+  let emoji = "🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝";
+
+  assert o.add(alice, { note("x", ?"m", null) with metadata = ?emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, note(emoji, ?"t", null), HOUR, tiny, 0) == null;
+  assert o.add(alice, { note("x", ?"b", null) with body = emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, { note("x", ?"u", null) with url = ?emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, note("x", ?"x", null), HOUR, tiny, 0) != null
+};
+
+// Content an earlier version counted in characters is replaced without the
+// count going below nothing.
+do {
+  let before = Outbox.emptyBefore();
+  before.content.add(Nat64.compare, Ids.keyed(alice, "k"), { title = "🍝"; body = "b"; url = null });
+  before.bytes := 66;
+
+  let o = Outbox.fromBefore(before);
+  assert o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0) != null;
+  assert o.bytes == 66
+};
+
+// An outbox an earlier version kept carries over whole, its content without
+// metadata and not dismissed, and the earlier one is left without content.
+do {
+  let before = Outbox.emptyBefore();
+  before.content.add(Nat64.compare, 7 : Nat64, { title = "t"; body = "b"; url = ?"u" });
+  before.bytes := 66;
+  before.counter := 3;
+
+  let o = Outbox.fromBefore(before);
+
+  switch (o.contentOf(7)) {
+    case (?content) assert content == {
+      title = "t";
+      body = "b";
+      url = ?"u";
+      metadata = null;
+      dismissed = false
+    };
+    case null assert false
+  };
+  assert o.bytes == 66 and o.counter == 3;
+  assert before.content.size() == 0
 };
 
 // Urgency decides the lane, so a high-urgency notification leads a batch.
@@ -203,6 +281,69 @@ do {
 };
 
 let MINUTE = 60_000_000_000;
+
+func dismissed(o : Outbox.State, id : Nat64) : Bool = switch (o.contentOf(id)) {
+  case (?content) content.dismissed;
+  case null false
+};
+
+// Dismissed after Internet Identity took it, it stays readable as dismissed for
+// the device woken for it, and goes once it expires.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  o.settle(o.take(10)[0]);
+
+  o.dismiss(alice, "k");
+
+  assert o.holds(x);
+  assert dismissed(o, x);
+  ignore o.sweep(HOUR);
+  assert not o.holds(x)
+};
+
+// Dismissed while out with a batch, it is accepted as dismissed.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  let batch = o.take(10);
+
+  o.dismiss(alice, "k");
+  o.settle(batch[0]);
+
+  assert dismissed(o, x)
+};
+
+// Dismissed while out with a batch and then refused, it is never sent on its
+// second attempt, and that is not a delivery failure.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  let batch = o.take(10);
+  o.dismiss(alice, "k");
+  assert o.park(batch[0], 0);
+
+  o.promote(HOUR);
+  let (live, expired) = o.sendable(o.take(10), MINUTE);
+
+  assert live.size() == 0;
+  assert expired.size() == 0;
+  assert not o.holds(x);
+  assert o.backlog() == 0
+};
+
+// Sending again after a dismissal is a live notification.
+do {
+  let o = Outbox.empty();
+  let x = id(o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0));
+  o.settle(o.take(10)[0]);
+  o.dismiss(alice, "k");
+
+  ignore o.add(alice, note("y", ?"k", null), HOUR, 1_000_000, 0);
+
+  assert o.holds(x);
+  assert not dismissed(o, x)
+};
 
 // Nothing refused a deferred notification, so a repeat of its key is given the
 // window it asks for rather than being stuck with the first send's.

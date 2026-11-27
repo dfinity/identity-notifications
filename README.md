@@ -17,6 +17,7 @@ notifications.send<system>(
     urgency = null;
     expiresAt = null;
     funnel = null;
+    metadata = null;
   },
 );
 ```

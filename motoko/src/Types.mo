@@ -30,7 +30,11 @@ module {
     /// to read a conversion rate for. A funnel costs a row until it is
     /// forgotten, so a label per notification is an unbounded set of
     /// one-notification funnels.
-    funnel : ?Text
+    funnel : ?Text;
+    /// App-defined data for the app's own service worker, such as the id of
+    /// the user who sent a message so it can draw their avatar. Readable only
+    /// by the recipient, and never shown by Internet Identity.
+    metadata : ?Text
   };
 
   /// What a channel pulls back. The rest of a `Notification` never leaves this
@@ -38,7 +42,15 @@ module {
   public type Content = {
     title : Text;
     body : Text;
-    url : ?Text
+    url : ?Text;
+    /// The `metadata` of the `Notification` the app sent, for its own service
+    /// worker. Readable only by the recipient, and never shown by Internet
+    /// Identity.
+    metadata : ?Text;
+    /// The app dismissed it after Internet Identity accepted it, so a device
+    /// woken for it leaves it alone rather than showing it. Only the recipient
+    /// reads a dismissed notification; Internet Identity finds none.
+    dismissed : Bool
   };
 
   /// What became of a set of notifications, counted once each and attributed

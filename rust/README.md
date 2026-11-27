@@ -74,6 +74,10 @@ fn send_message(to: Principal, text: String) {
 The `url` opens the conversation and the `key` names it, so the next message
 from `from` replaces that notification instead of stacking another beside it.
 
+`metadata` is for the app's own service worker: text Internet Identity never
+shows, such as the sender's id so the worker can draw their avatar. Only the
+recipient reads it back, with the content.
+
 Two more calls complete the surface:
 
 ```rust

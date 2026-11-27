@@ -2,9 +2,11 @@ import Array "mo:core/Array";
 import Int "mo:core/Int";
 import List "mo:core/List";
 import Map "mo:core/Map";
+import Nat "mo:core/Nat";
 import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
+import Set "mo:core/Set";
 import Blob "mo:core/Blob";
 import Text "mo:core/Text";
 import Time "mo:core/Time";
@@ -17,7 +19,8 @@ import Types "../Types";
 /// A notification is in one of three places: in a lane by urgency while it is
 /// ready to go, parked while it waits for a later attempt, or accepted, where
 /// only its content remains until it expires. `entries` says which, so a
-/// repeat of a key finds it in one look.
+/// repeat of a key finds it in one look. Between `take` and Internet
+/// Identity's answer it is out with a batch, which `inFlight` records.
 module {
 
   let HOUR : Nat = 3_600_000_000_000;
@@ -61,6 +64,8 @@ module {
     accepted : Schedule;
     content : Map.Map<Nat64, Types.Content>;
     entries : Map.Map<Nat64, Entry>;
+    /// Taken from its lane and not yet placed by Internet Identity's answer.
+    inFlight : Set.Set<Nat64>;
     var counter : Nat64;
     var idSeed : Nat64;
     var bytes : Nat;
@@ -73,10 +78,73 @@ module {
     accepted = Map.empty<(Time.Time, Nat64), Entry>();
     content = Map.empty<Nat64, Types.Content>();
     entries = Map.empty<Nat64, Entry>();
+    inFlight = Set.empty<Nat64>();
     var counter = 0;
     var idSeed = 0;
     var bytes = 0;
     var queued = 0
+  };
+
+  /// Content as versions before metadata kept it.
+  public type ContentBefore = {
+    title : Text;
+    body : Text;
+    url : ?Text
+  };
+
+  /// `State` as versions before metadata kept it. A stable variable keeps its
+  /// type across an upgrade, so the mixin still declares one of these under
+  /// the name those versions gave it, and moves it into a `State` with
+  /// `fromBefore`.
+  public type StateBefore = {
+    ready : LaneQueue.State<Entry>;
+    parked : Schedule;
+    accepted : Schedule;
+    content : Map.Map<Nat64, ContentBefore>;
+    entries : Map.Map<Nat64, Entry>;
+    var counter : Nat64;
+    var idSeed : Nat64;
+    var bytes : Nat;
+    var queued : Nat
+  };
+
+  /// What a fresh install declares under the earlier name, so `fromBefore`
+  /// has an empty outbox to start `State` from.
+  public func emptyBefore() : StateBefore = {
+    ready = LaneQueue.empty<Entry>(LANES);
+    parked = Map.empty<(Time.Time, Nat64), Entry>();
+    accepted = Map.empty<(Time.Time, Nat64), Entry>();
+    content = Map.empty<Nat64, ContentBefore>();
+    entries = Map.empty<Nat64, Entry>();
+    var counter = 0;
+    var idSeed = 0;
+    var bytes = 0;
+    var queued = 0
+  };
+
+  /// The outbox an earlier version kept, each content without metadata and not
+  /// dismissed. The lanes, schedules and entries are taken over rather than
+  /// copied, and `before` is left without content, so nothing is held twice.
+  /// Metadata adds nothing to the size of content that has none, so `bytes`
+  /// carries over.
+  public func fromBefore(before : StateBefore) : State {
+    let content = Map.empty<Nat64, Types.Content>();
+    for ((id, old) in before.content.entries()) {
+      content.add(Nat64.compare, id, { old with metadata = null; dismissed = false })
+    };
+    before.content.clear();
+    {
+      ready = before.ready;
+      parked = before.parked;
+      accepted = before.accepted;
+      content;
+      entries = before.entries;
+      inFlight = Set.empty<Nat64>();
+      var counter = before.counter;
+      var idSeed = before.idSeed;
+      var bytes = before.bytes;
+      var queued = before.queued
+    }
   };
 
   public func lane(urgency : ?Types.Urgency) : Nat = switch urgency {
@@ -110,14 +178,16 @@ module {
     let content : Types.Content = {
       title = notification.title;
       body = notification.body;
-      url = notification.url
+      url = notification.url;
+      metadata = notification.metadata;
+      dismissed = false
     };
     let size = sizeOf(content);
 
     // Replacing a notification frees what the old one held, so an app that
     // updates one key forever occupies one notification's worth of room.
     switch (self.content.get(Nat64.compare, id)) {
-      case (?old) self.bytes -= sizeOf(old);
+      case (?old) free(self, sizeOf(old));
       case null {}
     };
 
@@ -218,11 +288,19 @@ module {
     null
   };
 
-  public func take(self : State, count : Nat) : [Entry] = self.ready.take<Entry>(WEIGHTS, count, soonestExpiry);
+  /// Up to `count` entries out of their lanes, out with a batch until
+  /// Internet Identity's answer places each one.
+  public func take(self : State, count : Nat) : [Entry] {
+    let batch = self.ready.take<Entry>(WEIGHTS, count, soonestExpiry);
+    for (entry in batch.values()) {
+      self.inFlight.add(Nat64.compare, entry.id)
+    };
+    batch
+  };
 
   /// What a batch may still be sent, and what expired before anything could
   /// carry it, which is its cohort losing one. Anything the app has since
-  /// dismissed is no longer wanted and is neither.
+  /// dismissed is no longer wanted and is neither: it goes, content and all.
   public func sendable(self : State, batch : [Entry], now : Time.Time) : ([Entry], [Entry]) {
     let live = List.empty<Entry>();
     let expired = List.empty<Entry>();
@@ -231,8 +309,10 @@ module {
       if (entry.expiresAt <= now) {
         forget(self, entry.id);
         expired.add(entry)
-      } else if (holds(self, entry.id)) {
+      } else if (isLive(self, entry.id)) {
         live.add(entry)
+      } else {
+        forget(self, entry.id)
       }
     };
 
@@ -251,10 +331,22 @@ module {
     expired.filter<Entry>(func(entry) = not entry.received)
   };
 
-  /// The app says this no longer needs anyone's attention: it leaves the
-  /// outbox, and its content goes so a pull finds nothing.
+  /// The app says this no longer needs anyone's attention. Still waiting in
+  /// the outbox, it leaves it and its content goes. Out with a batch or
+  /// accepted, Internet Identity may wake a device for it, so its content
+  /// stays, marked dismissed, until it expires: the device that pulls it
+  /// leaves it alone rather than showing it.
   public func dismiss(self : State, recipient : Principal, key : Text) {
-    forget(self, Ids.keyed(recipient, key))
+    let id = Ids.keyed(recipient, key);
+    let ?entry = self.entries.get(Nat64.compare, id) else return;
+    if (queued(entry.stage) and not self.inFlight.contains(Nat64.compare, id)) {
+      forget(self, id);
+      return
+    };
+    switch (self.content.get(Nat64.compare, id)) {
+      case (?content) self.content.add(Nat64.compare, id, { content with dismissed = true });
+      case null {}
+    }
   };
 
   /// Whether this is the first channel to report showing the notification.
@@ -297,6 +389,12 @@ module {
   /// Notifications waiting for Internet Identity to accept them.
   public func backlog(self : State) : Nat = self.queued;
 
+  /// Content the app has not dismissed, so still worth sending.
+  func isLive(self : State, id : Nat64) : Bool = switch (self.content.get(Nat64.compare, id)) {
+    case (?content) not content.dismissed;
+    case null false
+  };
+
   /// Once only, from the first flush.
   public func seed(self : State, randomness : Blob) {
     if (self.idSeed == 0) self.idSeed := Ids.seedFrom(randomness)
@@ -319,6 +417,7 @@ module {
       case (#nowhere or #waiting) {}
     };
 
+    self.inFlight.remove(Nat64.compare, entry.id);
     let wasQueued = queued(entry.stage);
     entry.stage := stage;
     entry.dueAt := at;
@@ -347,6 +446,7 @@ module {
       };
       case null {}
     };
+    self.inFlight.remove(Nat64.compare, id);
     release(self, id)
   };
 
@@ -370,7 +470,7 @@ module {
   func release(self : State, id : Nat64) {
     switch (self.content.get(Nat64.compare, id)) {
       case (?content) {
-        self.bytes -= sizeOf(content);
+        free(self, sizeOf(content));
         self.content.remove(Nat64.compare, id)
       };
       case null {}
@@ -397,7 +497,19 @@ module {
 
   func laneOnly(only : Nat) : [Nat] = Array.tabulate<Nat>(LANES, func(lane) = if (lane == only) 1 else 0);
 
-  func sizeOf(content : Types.Content) : Nat = Text.size(content.title) + Text.size(content.body) + (
-    switch (content.url) { case (?u) Text.size(u); case null 0 }
-  ) + 64
+  /// Gives back the room some content held. Content an earlier version kept
+  /// was counted in characters, so it can hold less than its bytes say.
+  func free(self : State, size : Nat) {
+    self.bytes -= Nat.min(self.bytes, size)
+  };
+
+  /// What content costs in the canister's memory, which holds its text as
+  /// UTF-8.
+  func sizeOf(content : Types.Content) : Nat = bytesOf(content.title) + bytesOf(content.body) + (
+    switch (content.url) { case (?u) bytesOf(u); case null 0 }
+  ) + (
+    switch (content.metadata) { case (?m) bytesOf(m); case null 0 }
+  ) + 64;
+
+  func bytesOf(text : Text) : Nat = text.encodeUtf8().size()
 }

@@ -76,7 +76,8 @@ actor {
             key = ?conversation.id;
             urgency = null;
             expiresAt = null;
-            funnel = null
+            funnel = null;
+            metadata = null
           }
         )
       }

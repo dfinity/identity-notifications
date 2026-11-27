@@ -21,7 +21,7 @@ import Types "Types";
 ///     notifications.send(to, {
 ///       title = "New message"; body = text; url = null;
 ///       key = ?("chat-" # Principal.toText(caller));
-///       urgency = null; expiresAt = null;
+///       urgency = null; expiresAt = null; funnel = null; metadata = null;
 ///     });
 ///   };
 /// };
@@ -54,7 +54,12 @@ mixin<system>() {
     raw_rand : () -> async Blob
   };
 
-  let outbox = Outbox.empty();
+  /// The outbox as versions before metadata kept it, under the name they kept
+  /// it by: a stable variable keeps its type across an upgrade. Emptied into
+  /// `store` once, on the upgrade that declares `store`, and empty from then on.
+  let outbox = Outbox.emptyBefore();
+  /// What is waiting to be sent, and what a channel may still pull.
+  let store = Outbox.fromBefore(outbox);
   let pipeline = Metrics.empty();
 
   var batchLimit : Nat = BATCH_GUESS;
@@ -94,7 +99,7 @@ mixin<system>() {
             countAsk(hour, notification.funnel, #dropped);
             return
           };
-          let added = outbox.add(
+          let added = store.add(
             recipient,
             notification,
             now + II_DEFAULT_RETENTION,
@@ -117,16 +122,18 @@ mixin<system>() {
       senderOverride := sender
     };
 
-    /// This notification no longer needs anyone's attention. Its content goes,
-    /// so a pull finds nothing and a channel that sweeps can close it.
+    /// This notification no longer needs anyone's attention. One still in the
+    /// outbox is never sent. One Internet Identity already took stays
+    /// readable, marked `dismissed`, until it expires, so a device woken for
+    /// it leaves it alone instead of showing a stand-in.
     public func dismiss(recipient : Principal, key : Text) {
-      outbox.dismiss(recipient, key)
+      store.dismiss(recipient, key)
     };
 
     public func metrics() : Types.Metrics = {
       hours = pipeline.snapshot();
       funnels = pipeline.funnels();
-      backlog = outbox.backlog();
+      backlog = store.backlog();
       misconfigured
     };
 
@@ -152,16 +159,20 @@ mixin<system>() {
     id : Nat64
   ) : async ?Types.Content {
     if (not isReaderOf(id, caller)) return null;
-    outbox.contentOf(id)
+    let ?content = store.contentOf(id) else return null;
+    // Internet Identity shows what it pulls, so a dismissed notification is
+    // answered only to the recipient's own service worker, which leaves it alone.
+    if (content.dismissed and not isRecipientOf(id, caller)) return null;
+    ?content
   };
 
   /// Delivered. Content stays until it expires, because another of the user's
   /// devices may still pull it.
   public shared ({ caller }) func _internet_identity_notification_received(id : Nat64) : async () {
     if (not isReaderOf(id, caller)) return;
-    if (not outbox.holds(id)) return;
-    if (not outbox.markReceived(id)) return;
-    switch (outbox.entryOf(id)) {
+    if (not store.holds(id)) return;
+    if (not store.markReceived(id)) return;
+    switch (store.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #received);
       case null {}
     }
@@ -170,8 +181,8 @@ mixin<system>() {
   /// Somebody acted on the notification a channel showed them.
   public shared ({ caller }) func _internet_identity_notification_opened(id : Nat64) : async () {
     if (not isReaderOf(id, caller)) return;
-    if (not outbox.markOpened(id)) return;
-    switch (outbox.entryOf(id)) {
+    if (not store.markOpened(id)) return;
+    switch (store.entryOf(id)) {
       case (?entry) Flush.count(pipeline, entry, #opened);
       case null {}
     }
@@ -185,12 +196,17 @@ mixin<system>() {
   /// is derived from the recipient and a key, so whoever knows both can name
   /// another account's notification.
   func isReaderOf(id : Nat64, caller : Principal) : Bool {
-    let ?entry = outbox.entryOf(id) else return false;
+    let ?entry = store.entryOf(id) else return false;
     let signedAccount = switch (senderInfo()) {
       case (?info) ?info.account;
       case null null
     };
     CallerInfo.mayRead(entry.recipient, caller, signedAccount)
+  };
+
+  func isRecipientOf(id : Nat64, caller : Principal) : Bool {
+    let ?entry = store.entryOf(id) else return false;
+    CallerInfo.isRecipient(entry.recipient, caller)
   };
 
   /// Internet Identity signed this call's caller info, and it names our own
@@ -227,7 +243,7 @@ mixin<system>() {
   /// a nearer one.
   func arm<system>() {
     if (flushing) return;
-    let ?due = outbox.nextDue() else return;
+    let ?due = store.nextDue() else return;
 
     let now = Time.now();
     let soonest = now + COALESCE;
@@ -262,18 +278,18 @@ mixin<system>() {
     if (not seeded) {
       seeded := true;
       try {
-        outbox.seed(await randomness.raw_rand())
+        store.seed(await randomness.raw_rand())
       } catch (_) {}
     };
 
     let now = Time.now();
     // Internet Identity held them and no channel ever showed them, which is the
     // delivery pipeline's quietest loss.
-    for (entry in outbox.sweep(now).values()) {
+    for (entry in store.sweep(now).values()) {
       Flush.count(pipeline, entry, #dropped)
     };
-    outbox.promote(now);
-    let (batch, expired) = outbox.sendable(outbox.take(batchLimit), now);
+    store.promote(now);
+    let (batch, expired) = store.sendable(store.take(batchLimit), now);
     for (entry in expired.values()) {
       Flush.count(pipeline, entry, #dropped)
     };
@@ -302,7 +318,7 @@ mixin<system>() {
       case (#unreachable) {}
     };
 
-    Flush.apply(outbox, pipeline, batch, outcome, now);
+    Flush.apply(store, pipeline, batch, outcome, now);
     arm<system>()
   };
 

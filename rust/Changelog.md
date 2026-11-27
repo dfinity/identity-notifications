@@ -2,6 +2,22 @@
 
 ## Next
 
+* `dismiss` keeps a notification Internet Identity already took, marked
+  `dismissed` in the new field of `Content`, until it expires, instead of
+  deleting it. A device woken for it then leaves what is on screen alone
+  rather than showing a generic notification for content it could not find.
+  Only the recipient reads a dismissed notification; Internet Identity's pull
+  finds none, as before. One still waiting in the outbox is never sent, as
+  before.
+* Breaking change: `Content` has a new field, `dismissed`, so code that builds
+  one names it too.
+* A notification can carry `metadata`, app-defined text for the app's own
+  service worker, such as the id of the user who sent a message so it can draw
+  their avatar. It is stored with the content and returned by
+  `_internet_identity_notification_content` in the new `metadata` field of
+  `Content`, so only the recipient reads it, and Internet Identity never shows
+  it. It counts toward `notification_capacity_mb` like the title, body and url.
+  Content stored by an earlier version reads back without metadata.
 * An app's own service worker can now read a notification's content and
   report it received and opened, as the recipient. `@icp-sdk/auth` calls these
   endpoints as the signed-in user, without Internet Identity's caller info,

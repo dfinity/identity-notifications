@@ -202,7 +202,10 @@ pub fn forget_funnel(name: &str) {
     with_store(|store| store.forget_funnel(name));
 }
 
-/// This notification no longer needs anyone's attention.
+/// This notification no longer needs anyone's attention. One still in the
+/// outbox is never sent. One Internet Identity already took stays readable,
+/// marked [`Content::dismissed`], until it expires, so a device woken for it
+/// leaves it alone instead of showing a stand-in.
 pub fn dismiss(recipient: Principal, key: &str) {
     with_store(|store| store.dismiss(recipient, key));
 }
@@ -230,7 +233,13 @@ pub fn notification_content(id: NotificationId) -> Option<Content> {
     if !is_reader_of(id) {
         return None;
     }
-    with_store(|store| store.content_of(id)).flatten()
+    let content = with_store(|store| store.content_of(id)).flatten()?;
+    // Internet Identity shows what it pulls, so a dismissed notification is
+    // answered only to the recipient's own service worker, which leaves it alone.
+    if content.dismissed && !is_recipient(id) {
+        return None;
+    }
+    Some(content)
 }
 
 /// Records that a channel showed the notification.
@@ -297,6 +306,13 @@ fn is_reader_of(id: NotificationId) -> bool {
     };
     let signed_account = sender_info().map(|info| info.account);
     internal::caller_info::may_read(recipient, msg_caller(), signed_account)
+}
+
+/// The recipient calling as themselves, as an app's own service worker does.
+fn is_recipient(id: NotificationId) -> bool {
+    let caller = msg_caller();
+    caller != Principal::anonymous()
+        && with_store(|store| store.recipient_of(id)).flatten() == Some(caller)
 }
 
 /// Internet Identity signed this call's caller info, and it names our own
