@@ -1,6 +1,7 @@
 import List "mo:core/List";
 import Map "mo:core/Map";
 import Nat64 "mo:core/Nat64";
+import Ids "../src/Internal/Ids";
 import Outbox "../src/Internal/Outbox";
 import Principal "mo:core/Principal";
 
@@ -68,6 +69,32 @@ do {
 
   assert o.add(alice, heavy, HOUR, tiny, 0) == null;
   assert o.add(alice, note("x", ?"x", null), HOUR, tiny, 0) != null
+};
+
+// Text that is not ASCII counts its UTF-8 bytes toward the ceiling, not its
+// characters: 34 emoji are 136 bytes.
+do {
+  let o = Outbox.empty();
+  let tiny = 100;
+  let emoji = "🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝🍝";
+
+  assert o.add(alice, { note("x", ?"m", null) with metadata = ?emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, note(emoji, ?"t", null), HOUR, tiny, 0) == null;
+  assert o.add(alice, { note("x", ?"b", null) with body = emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, { note("x", ?"u", null) with url = ?emoji }, HOUR, tiny, 0) == null;
+  assert o.add(alice, note("x", ?"x", null), HOUR, tiny, 0) != null
+};
+
+// Content an earlier version counted in characters is replaced without the
+// count going below nothing.
+do {
+  let before = Outbox.emptyBefore();
+  before.content.add(Nat64.compare, Ids.keyed(alice, "k"), { title = "🍝"; body = "b"; url = null });
+  before.bytes := 66;
+
+  let o = Outbox.fromBefore(before);
+  assert o.add(alice, note("x", ?"k", null), HOUR, 1_000_000, 0) != null;
+  assert o.bytes == 66
 };
 
 // An outbox an earlier version kept carries over whole, its content without

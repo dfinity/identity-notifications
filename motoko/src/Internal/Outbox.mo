@@ -2,6 +2,7 @@ import Array "mo:core/Array";
 import Int "mo:core/Int";
 import List "mo:core/List";
 import Map "mo:core/Map";
+import Nat "mo:core/Nat";
 import Nat64 "mo:core/Nat64";
 import Order "mo:core/Order";
 import Principal "mo:core/Principal";
@@ -186,7 +187,7 @@ module {
     // Replacing a notification frees what the old one held, so an app that
     // updates one key forever occupies one notification's worth of room.
     switch (self.content.get(Nat64.compare, id)) {
-      case (?old) self.bytes -= sizeOf(old);
+      case (?old) free(self, sizeOf(old));
       case null {}
     };
 
@@ -469,7 +470,7 @@ module {
   func release(self : State, id : Nat64) {
     switch (self.content.get(Nat64.compare, id)) {
       case (?content) {
-        self.bytes -= sizeOf(content);
+        free(self, sizeOf(content));
         self.content.remove(Nat64.compare, id)
       };
       case null {}
@@ -496,9 +497,19 @@ module {
 
   func laneOnly(only : Nat) : [Nat] = Array.tabulate<Nat>(LANES, func(lane) = if (lane == only) 1 else 0);
 
-  func sizeOf(content : Types.Content) : Nat = Text.size(content.title) + Text.size(content.body) + (
-    switch (content.url) { case (?u) Text.size(u); case null 0 }
+  /// Gives back the room some content held. Content an earlier version kept
+  /// was counted in characters, so it can hold less than its bytes say.
+  func free(self : State, size : Nat) {
+    self.bytes -= Nat.min(self.bytes, size)
+  };
+
+  /// What content costs in the canister's memory, which holds its text as
+  /// UTF-8.
+  func sizeOf(content : Types.Content) : Nat = bytesOf(content.title) + bytesOf(content.body) + (
+    switch (content.url) { case (?u) bytesOf(u); case null 0 }
   ) + (
-    switch (content.metadata) { case (?m) Text.size(m); case null 0 }
-  ) + 64
+    switch (content.metadata) { case (?m) bytesOf(m); case null 0 }
+  ) + 64;
+
+  func bytesOf(text : Text) : Nat = text.encodeUtf8().size()
 }

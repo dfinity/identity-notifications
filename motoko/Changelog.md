@@ -2,6 +2,10 @@
 
 ## Next
 
+* `notification_capacity_mb` counts content in UTF-8 bytes, as Rust does.
+  Title, body, url and metadata were counted in characters, so text that is
+  not ASCII, such as emoji, filled up to four times the memory the ceiling
+  allowed.
 * `dismiss` no longer drops a notification Internet Identity already took or
   is taking. Its content stays until it expires, marked by the new `dismissed`
   field of `Types.Content`, so a device woken for it pulls it and leaves it
