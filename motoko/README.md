@@ -82,6 +82,9 @@ canister. Where it does not list the frontend, `metrics()` reports
 `#notListedFrontend` under `misconfigured`, and the notifications wait in the
 outbox until it does or they expire.
 
+Set both once. Changing either changes every user's principal, and
+notifications still queued then are dropped.
+
 ## Upgrades
 
 Nothing to do. The library's state is stable — the outbox, the content a
