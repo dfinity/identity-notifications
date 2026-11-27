@@ -747,7 +747,7 @@ impl Store {
     pub fn dismiss(&mut self, recipient: Principal, key: &str) {
         let id = ids::keyed(recipient, key);
         let Some(slot) = self.slot_of(id) else { return };
-        let is_waiting = slot.queued() && self.entries.contains_key(&slot.key(id));
+        let is_waiting = matches!(slot.kind, keys::WAITING | keys::PARKED);
         if is_waiting {
             self.unplace(id);
             self.release(id);
