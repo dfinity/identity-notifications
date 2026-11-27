@@ -63,6 +63,48 @@ do {
   }
 };
 
+// A pull minted for the derivation origin is answered, and one for the
+// frontend is not.
+do {
+  let config = configured({
+    notification_sender = ?II;
+    notification_origin = ?"https://mail.suite.example";
+    notification_derivation_origin = ?"https://suite.example";
+    notification_capacity_mb = null
+  });
+
+  assert Config.isApplication(config, "https://suite.example");
+  assert not Config.isApplication(config, "https://mail.suite.example");
+  assert not Config.isApplication(config, "https://other.example")
+};
+
+// A derivation origin is the application on every gateway domain.
+do {
+  let config = configured({
+    notification_sender = ?II;
+    notification_origin = ?"https://mail.suite.example";
+    notification_derivation_origin = ?"https://vt36r-2qaaa-aaaad-aad5a-cai.icp0.io";
+    notification_capacity_mb = null
+  });
+
+  assert Config.isApplication(config, "https://vt36r-2qaaa-aaaad-aad5a-cai.ic0.app");
+  assert Config.isApplication(config, "https://vt36r-2qaaa-aaaad-aad5a-cai.icp.net");
+  assert not Config.isApplication(config, "https://mail.suite.example")
+};
+
+// Without a derivation origin, a pull is answered for the frontend alone.
+do {
+  let config = configured({
+    notification_sender = ?II;
+    notification_origin = ?"https://app.example.com";
+    notification_derivation_origin = null;
+    notification_capacity_mb = null
+  });
+
+  assert Config.isApplication(config, "https://app.example.com");
+  assert not Config.isApplication(config, "https://suite.example")
+};
+
 // The capacity falls back to its default where it is no number.
 do {
   let config = configured({

@@ -3,6 +3,7 @@ import Principal "mo:core/Principal";
 import Runtime "mo:core/Runtime";
 import Text "mo:core/Text";
 import Types "../Types";
+import Origin "Origin";
 
 /// Four environment variables, two of them optional. Read on use, because a
 /// canister's environment does not change under it.
@@ -66,6 +67,10 @@ module {
     case (?derivationOrigin) derivationOrigin;
     case null config.origin
   };
+
+  /// Whether an origin Internet Identity signed into a pull's caller info is
+  /// this application's, on whichever gateway domain it was spelled.
+  public func isApplication(config : Config, origin : Text) : Bool = Origin.fold(origin) == Origin.fold(applicationOrigin(config));
 
   func nonEmpty(value : ?Text) : ?Text = switch value {
     case (?text) if (Text.size(text) == 0) null else ?text;

@@ -26,6 +26,12 @@ impl Config {
     pub fn application_origin(&self) -> &str {
         self.derivation_origin.as_deref().unwrap_or(&self.origin)
     }
+
+    /// Whether an origin Internet Identity signed into a pull's caller info is
+    /// this application's, on whichever gateway domain it was spelled.
+    pub fn is_application(&self, origin: &str) -> bool {
+        super::origin::fold(origin) == super::origin::fold(self.application_origin())
+    }
 }
 
 /// The variables `lookup` answers, as a configuration. Missing configuration is
@@ -130,6 +136,49 @@ mod tests {
         ]);
 
         assert_eq!(config, Err(Misconfigured::Origin));
+    }
+
+    #[test]
+    fn a_pull_minted_for_the_derivation_origin_is_answered_and_one_for_the_frontend_is_not() {
+        let config = configured(&[
+            ("notification_sender", II),
+            ("notification_origin", "https://mail.suite.example"),
+            ("notification_derivation_origin", "https://suite.example"),
+        ])
+        .expect("configured");
+
+        assert!(config.is_application("https://suite.example"));
+        assert!(!config.is_application("https://mail.suite.example"));
+        assert!(!config.is_application("https://other.example"));
+    }
+
+    #[test]
+    fn a_derivation_origin_is_the_application_on_every_gateway_domain() {
+        let config = configured(&[
+            ("notification_sender", II),
+            ("notification_origin", "https://mail.suite.example"),
+            (
+                "notification_derivation_origin",
+                "https://vt36r-2qaaa-aaaad-aad5a-cai.icp0.io",
+            ),
+        ])
+        .expect("configured");
+
+        assert!(config.is_application("https://vt36r-2qaaa-aaaad-aad5a-cai.ic0.app"));
+        assert!(config.is_application("https://vt36r-2qaaa-aaaad-aad5a-cai.icp.net"));
+        assert!(!config.is_application("https://mail.suite.example"));
+    }
+
+    #[test]
+    fn without_a_derivation_origin_a_pull_is_answered_for_the_frontend_alone() {
+        let config = configured(&[
+            ("notification_sender", II),
+            ("notification_origin", "https://app.example.com"),
+        ])
+        .expect("configured");
+
+        assert!(config.is_application("https://app.example.com"));
+        assert!(!config.is_application("https://suite.example"));
     }
 
     #[test]

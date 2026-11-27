@@ -8,7 +8,6 @@ import Config "Internal/Config";
 import Flush "Internal/Flush";
 import II "Internal/II";
 import Metrics "Internal/Metrics";
-import Origin "Internal/Origin";
 import Outbox "Internal/Outbox";
 import Types "Types";
 
@@ -202,7 +201,7 @@ mixin<system>() {
     let #ok(config) = configured else return null;
     let ?signer = sender(config) else return null;
     let ?info = CallerInfo.read(signer) else return null;
-    if (Origin.fold(info.origin) != Origin.fold(Config.applicationOrigin(config))) return null;
+    if (not Config.isApplication(config, info.origin)) return null;
     ?info
   };
 
