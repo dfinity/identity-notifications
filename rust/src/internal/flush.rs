@@ -5,6 +5,11 @@ use super::ii;
 use super::store::{Entry, Event, Store};
 use std::collections::HashMap;
 
+/// How long a batch the application's configuration refused waits before it is
+/// tried again. Only its operator can fix that, so a call every coalesce window
+/// would spend cycles on the same answer until they do.
+pub const MISCONFIGURED_RETRY_NS: u64 = 60 * 1_000_000_000;
+
 #[derive(Clone, Debug)]
 pub enum Outcome {
     /// Sent, with whatever Internet Identity would not take.
@@ -78,9 +83,17 @@ pub fn apply(store: &mut Store, batch: Vec<Entry>, outcome: Outcome, now: u64) {
             }
         }
 
-        Outcome::TooMany(_) | Outcome::NotAuthorized | Outcome::FrontendNotListed => {
+        Outcome::TooMany(_) => {
             for entry in batch {
                 store.requeue(entry, now);
+            }
+        }
+
+        // Nothing was enqueued, and nothing will be until the application's
+        // configuration changes: later, without spending the second attempt.
+        Outcome::NotAuthorized | Outcome::FrontendNotListed => {
+            for entry in batch {
+                store.defer(entry, now + MISCONFIGURED_RETRY_NS);
             }
         }
     }

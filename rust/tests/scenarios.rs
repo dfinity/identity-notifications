@@ -401,8 +401,37 @@ fn a_batch_refused_for_an_unlisted_frontend_is_not_lost() {
 
     assert_eq!(world.store.backlog(), 3);
     assert_eq!(world.dropped(), 0);
-    let flushed = world.flush(HOUR + MINUTE);
+    assert_eq!(
+        world.flush(HOUR + 2_000_000_000).sent,
+        0,
+        "not again at the next coalesce window"
+    );
+    let flushed = world.flush(HOUR + flush::MISCONFIGURED_RETRY_NS);
     assert_eq!((flushed.sent, flushed.accepted), (3, 3));
+}
+
+#[test]
+fn a_batch_refused_for_an_unlisted_sender_waits_without_spending_its_retry() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.send(user(0), message("m", None), HOUR);
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    flush::apply(&mut world.store, batch, Outcome::NotAuthorized, HOUR);
+    assert_eq!(world.store.backlog(), 1);
+    assert_eq!(world.flush(HOUR + 2_000_000_000).sent, 0);
+
+    world.store.promote(HOUR + flush::MISCONFIGURED_RETRY_NS);
+    let batch = world.store.take(10);
+    flush::apply(
+        &mut world.store,
+        batch,
+        Outcome::NotAuthorized,
+        HOUR + flush::MISCONFIGURED_RETRY_NS,
+    );
+    assert_eq!(world.store.backlog(), 1, "a second refusal drops nothing");
+    assert_eq!(world.dropped(), 0);
 }
 
 #[test]

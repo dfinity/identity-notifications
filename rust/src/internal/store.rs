@@ -631,8 +631,9 @@ impl Store {
         true
     }
 
-    /// Internet Identity asked for this one later. Not a refusal, so it does
-    /// not spend the second attempt.
+    /// Internet Identity asked for this one later, or the application's
+    /// configuration refused its batch. Not a refusal of the notification, so
+    /// it does not spend the second attempt.
     pub fn defer(&mut self, mut entry: Entry, retry_after: u64) {
         entry.due_at = retry_after;
         self.place(entry, keys::PARKED, entry.due_at);
@@ -810,6 +811,16 @@ impl Store {
             return;
         }
         meta.misconfigured = Some(MisconfiguredSince { why, since: now });
+        self.set_meta(meta);
+    }
+
+    /// Internet Identity took a batch, so nothing is misconfigured any more.
+    pub fn clear_misconfigured(&mut self) {
+        let mut meta = self.meta();
+        if meta.misconfigured.is_none() {
+            return;
+        }
+        meta.misconfigured = None;
         self.set_meta(meta);
     }
 
@@ -1496,6 +1507,24 @@ mod tests {
         store.promote(30 * HOUR);
         let last = store.take(10);
         assert!(!store.park(last[0], 25 * HOUR), "and only one of them");
+    }
+
+    #[test]
+    fn a_misconfiguration_is_reported_until_it_is_cleared() {
+        let mut store = store();
+        store.note(Misconfigured::NotListedFrontend, HOUR);
+        store.note(Misconfigured::NotListedFrontend, 2 * HOUR);
+        assert_eq!(
+            store.misconfigured(),
+            Some(MisconfiguredSince {
+                why: Misconfigured::NotListedFrontend,
+                since: HOUR,
+            }),
+            "since the first time it was seen"
+        );
+
+        store.clear_misconfigured();
+        assert_eq!(store.misconfigured(), None);
     }
 
     #[test]

@@ -387,7 +387,10 @@ async fn flush_once() {
         }
         Outcome::NotAuthorized => note(Misconfigured::NotAuthorizedSender, now),
         Outcome::FrontendNotListed => note(Misconfigured::NotListedFrontend, now),
-        _ => {}
+        Outcome::Answered(_) => {
+            with_store(|store| store.clear_misconfigured());
+        }
+        Outcome::Unreachable => {}
     }
 
     with_store(|store| flush::apply(store, batch, outcome, now));

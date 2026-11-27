@@ -297,7 +297,9 @@ mixin<system>() {
       case (#tooMany(limit)) batchLimit := limit;
       case (#notAuthorized) note(#notAuthorizedSender);
       case (#frontendNotListed) note(#notListedFrontend);
-      case (_) {}
+      // Internet Identity took the batch, so nothing is misconfigured any more.
+      case (#answered(_)) misconfigured := null;
+      case (#unreachable) {}
     };
 
     Flush.apply(outbox, pipeline, batch, outcome, now);

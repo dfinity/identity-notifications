@@ -377,8 +377,29 @@ do {
 
   assert w.outbox.backlog() == 3;
   assert totals(w).dropped == 0;
-  let flushed = flush(w, HOUR + MINUTE);
+  // Not again at the next coalesce window.
+  assert flush(w, HOUR + 2_000_000_000).sent == 0;
+  let flushed = flush(w, HOUR + Flush.MISCONFIGURED_RETRY);
   assert flushed.sent == 3 and flushed.accepted == 3
+};
+
+// A batch refused for an unlisted sender waits without spending its retry: a
+// second refusal drops nothing.
+do {
+  let w = world(10);
+  reachable(w, user(0));
+  send(w, user(0), message("m", null, null), HOUR);
+
+  w.outbox.promote(HOUR);
+  Flush.apply(w.outbox, w.pipeline, w.outbox.take(10), #notAuthorized, HOUR);
+  assert w.outbox.backlog() == 1;
+  assert flush(w, HOUR + 2_000_000_000).sent == 0;
+
+  let later = HOUR + Flush.MISCONFIGURED_RETRY;
+  w.outbox.promote(later);
+  Flush.apply(w.outbox, w.pipeline, w.outbox.take(10), #notAuthorized, later);
+  assert w.outbox.backlog() == 1;
+  assert totals(w).dropped == 0
 };
 
 // An unlisted sender and an unlisted frontend are told apart.

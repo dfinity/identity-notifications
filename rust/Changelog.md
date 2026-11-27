@@ -18,6 +18,13 @@
   not list the frontend among its alternative origins is reported as
   `NotListedFrontend` under `misconfigured`, and its notifications wait in the
   outbox, as they do for an unlisted sender.
+* A batch refused for an unlisted sender or an unlisted frontend is tried
+  again a minute later, instead of at the next two-second flush, and still
+  without spending the notification's second attempt. Only the application's
+  operator can fix either, so the calls in between spent cycles on the same
+  answer.
+* `misconfigured` is cleared once Internet Identity accepts a batch, so
+  `metrics()` stops reporting a misconfiguration the operator has fixed.
 
 ## 0.1.2
 

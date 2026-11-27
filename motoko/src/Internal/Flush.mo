@@ -13,6 +13,11 @@ import Outbox "Outbox";
 /// batch, makes the call, and hands the answer back here.
 module {
 
+  /// How long a batch the application's configuration refused waits before it
+  /// is tried again. Only its operator can fix that, so a call every coalesce
+  /// window would spend cycles on the same answer until they do.
+  public let MISCONFIGURED_RETRY : Nat = 60_000_000_000;
+
   public type Outcome = {
     /// The application does not publish this canister as one of its senders.
     #notAuthorized;
@@ -88,9 +93,17 @@ module {
         }
       };
 
-      case (#tooMany(_) or #notAuthorized or #frontendNotListed) {
+      case (#tooMany(_)) {
         for (entry in batch.values()) {
           outbox.requeue(entry, now)
+        }
+      };
+
+      // Nothing was enqueued, and nothing will be until the application's
+      // configuration changes: later, without spending the second attempt.
+      case (#notAuthorized or #frontendNotListed) {
+        for (entry in batch.values()) {
+          outbox.defer(entry, now + MISCONFIGURED_RETRY)
         }
       }
     }
