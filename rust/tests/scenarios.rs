@@ -303,10 +303,10 @@ fn an_accepted_notification_says_which_account_may_pull_it() {
     );
 }
 
-/// A batch in flight has its entries out of the map while the call to Internet
-/// Identity is awaited, and an already accepted notification resent under the
-/// same key goes back out in one. A channel pulling in that window is asking
-/// about content the app still holds, so it has to be answered.
+/// An already accepted notification resent under the same key goes back out in
+/// a batch, and the call to Internet Identity is awaited. A channel pulling in
+/// that window is asking about content the app still holds, so it has to be
+/// answered.
 #[test]
 fn a_notification_out_with_a_batch_still_says_who_it_is_for() {
     let mut world = World::new(10);
@@ -546,6 +546,34 @@ fn a_receipt_counts_in_the_hour_and_funnel_the_notification_came_in() {
     let hours = world.store.hours();
     assert_eq!(hours.len(), 1, "no bucket for the hour of the receipt");
     assert_eq!((hours[0].start, hours[0].counts.received), (HOUR, 1));
+    assert_eq!(world.store.funnels()[0].counts.received, 1);
+}
+
+/// A channel can show a notification and report it while the batch carrying it
+/// is still being sent, such as the earlier push of a key that is being resent.
+/// The receipt and the open count then, once, and the batch's outcome keeps
+/// them, so the notification is not a drop when it expires.
+#[test]
+fn a_receipt_and_an_open_while_the_batch_is_out_are_kept() {
+    let mut world = World::new(10);
+    world.reachable(user(0));
+    world.send(user(0), in_funnel("m", "launch"), HOUR);
+    let id = identity_notifications::internal::ids::keyed(user(0), "m");
+
+    world.store.promote(HOUR);
+    let batch = world.store.take(10);
+    assert_eq!(batch.len(), 1);
+
+    assert!(world.store.mark_received(id), "received mid-batch");
+    assert!(world.store.mark_opened(id), "and opened");
+    flush::apply(&mut world.store, batch, Outcome::Answered(Vec::new()), HOUR);
+
+    assert!(!world.store.mark_received(id), "counted once");
+    assert!(!world.store.mark_opened(id), "counted once");
+
+    world.flush(3 * HOUR);
+    let counts = world.store.hours()[0].counts.clone();
+    assert_eq!((counts.received, counts.opened, counts.dropped), (1, 1, 0));
     assert_eq!(world.store.funnels()[0].counts.received, 1);
 }
 

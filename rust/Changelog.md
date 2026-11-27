@@ -25,6 +25,10 @@
   answer.
 * `misconfigured` is cleared once Internet Identity accepts a batch, so
   `metrics()` stops reporting a misconfiguration the operator has fixed.
+* A receipt or an open a channel reports while its notification is in a batch
+  being sent is counted, and kept by the batch's outcome. It was lost, so the
+  notification counted as dropped when it expired, as if no channel had shown
+  it.
 
 ## 0.1.2
 

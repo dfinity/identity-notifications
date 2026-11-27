@@ -3,8 +3,8 @@
 //! A map is ordered by the bytes its key encodes to, so fields go big-endian
 //! in the order they should sort by, and the leading byte separates the kinds
 //! of row: what is waiting to be sent, what is waiting for a second attempt,
-//! what Internet Identity accepted, and one row per notification saying which
-//! of those it is in.
+//! what Internet Identity accepted, what is out with a batch being sent, and
+//! one row per notification saying which of those it is in.
 
 use ic_stable_structures::storable::{Bound, Storable};
 use std::borrow::Cow;
@@ -13,6 +13,7 @@ pub const WAITING: u8 = 0;
 pub const PARKED: u8 = 1;
 pub const ACCEPTED: u8 = 2;
 const SLOT: u8 = 3;
+pub const SENDING: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntryKey {
@@ -58,6 +59,16 @@ impl EntryKey {
     pub fn slot(id: u64) -> Self {
         Self {
             kind: SLOT,
+            first: 0,
+            second: 0,
+            id,
+        }
+    }
+
+    /// Out with a batch while the call to Internet Identity is awaited.
+    pub fn sending(id: u64) -> Self {
+        Self {
+            kind: SENDING,
             first: 0,
             second: 0,
             id,
@@ -162,6 +173,7 @@ mod tests {
         assert!(waiting < encoded(EntryKey::parked(0, 0)));
         assert!(parked < encoded(EntryKey::accepted(0, 0)));
         assert!(accepted < encoded(EntryKey::slot(0)));
+        assert!(encoded(EntryKey::slot(u64::MAX)) < encoded(EntryKey::sending(0)));
     }
 
     #[test]
@@ -182,6 +194,7 @@ mod tests {
             EntryKey::parked(7, u64::MAX),
             EntryKey::accepted(9, 42),
             EntryKey::slot(42),
+            EntryKey::sending(42),
         ] {
             assert_eq!(EntryKey::from_bytes(key.to_bytes()), key);
         }

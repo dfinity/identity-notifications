@@ -71,9 +71,8 @@ struct Slot {
     lane: u8,
     expires_at: u64,
     due_at: u64,
-    /// Who the notification is for, so a pull is still answerable while the
-    /// entry itself is out with a batch. Absent only in a row written before
-    /// the library had a use for it.
+    /// Who the notification is for. Absent only in a row written before the
+    /// library kept it here, where the entry answers instead.
     recipient: Option<Principal>,
 }
 
@@ -82,12 +81,13 @@ impl Slot {
         match self.kind {
             keys::WAITING => EntryKey::waiting(self.lane, self.expires_at, id),
             keys::PARKED => EntryKey::parked(self.due_at, id),
+            keys::SENDING => EntryKey::sending(id),
             _ => EntryKey::accepted(self.expires_at, id),
         }
     }
 
     fn queued(&self) -> bool {
-        self.kind == keys::WAITING || self.kind == keys::PARKED
+        self.kind == keys::WAITING || self.kind == keys::PARKED || self.kind == keys::SENDING
     }
 }
 
@@ -588,9 +588,8 @@ impl Store {
                         .next()
                         .map(|row| row.into_pair())
                     {
-                        Some((key, Row::Entry(entry))) => {
-                            self.entries.remove(&key);
-                            self.keep_recipient(&entry);
+                        Some((_, Row::Entry(entry))) => {
+                            self.place(entry, keys::SENDING, 0);
                             taken.push(entry);
                             progressed = true;
                         }
@@ -746,30 +745,10 @@ impl Store {
         self.content.get(&id).map(|StoredContent(content)| content)
     }
 
-    /// Puts the recipient on the slot of an entry about to leave, for a slot
-    /// written before slots carried one. The entry answered for those, and it
-    /// is the entry that a batch takes away, so without this a pull landing
-    /// while that batch is in flight has nothing left to read.
-    fn keep_recipient(&mut self, entry: &Entry) {
-        let Some(slot) = self.slot_of(entry.id) else {
-            return;
-        };
-        if slot.recipient.is_some() {
-            return;
-        }
-        self.entries.insert(
-            EntryKey::slot(entry.id),
-            Row::Slot(Slot {
-                recipient: Some(entry.recipient),
-                ..slot
-            }),
-        );
-    }
-
     /// Who this notification is for, for as long as there is one.
     ///
-    /// The slot answers while the entry is out with a batch in flight, and the
-    /// entry answers for a slot written before slots carried a recipient. Both
+    /// The slot answers, and the entry answers for a slot written before slots
+    /// carried a recipient. Both
     /// go when the content does, so content an app still holds always has a
     /// recipient to answer for it.
     pub fn recipient_of(&self, id: NotificationId) -> Option<Principal> {
@@ -996,8 +975,10 @@ impl Store {
         }
     }
 
-    /// Puts an entry in one of the three orders and records where it went.
-    fn place(&mut self, entry: Entry, kind: u8, at: u64) {
+    /// Puts an entry in one of the orders and records where it went. An entry
+    /// coming back from a batch keeps the receipt and the open a channel
+    /// reported while the batch was being sent.
+    fn place(&mut self, mut entry: Entry, kind: u8, at: u64) {
         let slot = Slot {
             kind,
             recipient: Some(entry.recipient),
@@ -1008,7 +989,12 @@ impl Store {
 
         let was = self.slot_of(entry.id);
         if let Some(old) = was {
-            self.entries.remove(&old.key(entry.id));
+            if let Some(Row::Entry(sent)) = self.entries.remove(&old.key(entry.id)) {
+                if old.kind == keys::SENDING {
+                    entry.received |= sent.received;
+                    entry.opened |= sent.opened;
+                }
+            }
         }
 
         self.entries.insert(slot.key(entry.id), Row::Entry(entry));
@@ -1316,8 +1302,8 @@ mod tests {
         }
     }
 
-    /// A row an earlier version wrote carries no recipient, and the entry that
-    /// answered for it is what a batch takes away.
+    /// A row an earlier version wrote carries no recipient, and a batch taking
+    /// its entry leaves it answerable.
     #[test]
     fn a_row_written_before_slots_carried_a_recipient_still_answers_mid_batch() {
         let mut store = store();
@@ -1335,11 +1321,7 @@ mod tests {
 
         assert_eq!(store.take(10).len(), 1, "the entry leaves with the batch");
 
-        assert_eq!(
-            store.recipient_of(id),
-            Some(alice()),
-            "and the slot answers in its place"
-        );
+        assert_eq!(store.recipient_of(id), Some(alice()));
     }
 
     #[test]
